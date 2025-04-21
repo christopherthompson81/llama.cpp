@@ -68,14 +68,14 @@ class DownloadWorker(QThread):
             logging.info(f"Download finished. Model saved to: {path}")
             if self._is_running:
                 self.finished_signal.emit(f"Download complete. Model path: {path}", False)
-       except HfHubHTTPError as e:
-           logging.error(f"HTTP Error during download: {e}")
-           if self._is_running:
-               error_msg = (f"Error downloading {self.repo_id}: {e}. "
-                            f"Check Repo ID and network. Gated model? (HF_TOKEN)")
-               self.finished_signal.emit(error_msg, True)
-       except Exception as e:
-           logging.exception(f"An unexpected error occurred during download of {self.repo_id}")
+        except HfHubHTTPError as e:
+            logging.error(f"HTTP Error during download: {e}")
+            if self._is_running:
+                error_msg = (f"Error downloading {self.repo_id}: {e}. "
+                             f"Check Repo ID and network. Gated model? (HF_TOKEN)")
+                self.finished_signal.emit(error_msg, True)
+        except Exception as e:
+            logging.exception(f"An unexpected error occurred during download of {self.repo_id}")
             if self._is_running:
                 self.finished_signal.emit(f"Error: {e}", True)
         finally:
