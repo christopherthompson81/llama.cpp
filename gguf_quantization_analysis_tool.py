@@ -108,6 +108,11 @@ class MainWindow(QMainWindow):
         self.repo_id_input.setPlaceholderText("e.g., meta-llama/Llama-3.1-8B-Instruct")
         input_layout.addRow("Hugging Face Repo ID:", self.repo_id_input)
 
+        self.hf_token_input = QLineEdit()
+        self.hf_token_input.setPlaceholderText("Optional: Your Hugging Face token (for gated models)")
+        self.hf_token_input.setEchoMode(QLineEdit.EchoMode.Password) # Hide token
+        input_layout.addRow("Hugging Face Token:", self.hf_token_input)
+
         self.local_dir_layout = QHBoxLayout()
         self.local_dir_input = QLineEdit()
         self.local_dir_input.setPlaceholderText("Select directory to save model files")
@@ -193,19 +198,22 @@ class MainWindow(QMainWindow):
              QMessageBox.critical(self, "Directory Error", f"Selected path {local_dir} is not a valid directory.")
              return
 
+       hf_token = self.hf_token_input.text().strip() or None # Use None if empty
+
         # --- Start Download ---
         self.clear_progress_bars()
         self.update_status(f"Status: Preparing download for {repo_id}...")
         self.download_button.setEnabled(False) # Disable button during download
 
         # Get token (optional, for gated models)
-        token = HfFolder.get_token()
-        if not token:
+        # Use provided token first, otherwise try to get from environment/login
+        token_to_use = hf_token or HfFolder.get_token()
+        if not token_to_use and not hf_token: # Only warn if no token was provided *and* none found automatically
              logging.warning("HF Token not found. Accessing gated models may fail. "
                            "Set HF_TOKEN environment variable or login via `huggingface-cli login`.")
 
         # Start download in a separate thread
-        self.download_thread = DownloadWorker(repo_id, local_dir, token)
+        self.download_thread = DownloadWorker(repo_id, local_dir, token_to_use)
         # Connect signals
         self.download_thread.status_update.connect(self.update_status)
         # self.download_thread.new_file_signal.connect(self.add_progress_bar) # TODO
