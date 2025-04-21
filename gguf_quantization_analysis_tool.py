@@ -16,7 +16,7 @@ import sys
 from PySide6.QtCore import QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
+    QLineEdit, QMainWindow, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 )
 from huggingface_hub import snapshot_download
@@ -92,6 +92,7 @@ class DownloadWorker(QThread):
 # --- Main Application Window ---
 class MainWindow(QMainWindow):
     """Main window for the GGUF Quantization Analysis Tool."""
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("GGUF Quantization Analysis Tool")
@@ -149,7 +150,6 @@ class MainWindow(QMainWindow):
         scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.progress_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-
         self.main_layout.addWidget(scroll_area) # Add scroll area to main layout
 
         # --- Status Bar ---
@@ -167,7 +167,7 @@ class MainWindow(QMainWindow):
             self,
             "Select Download Directory",
             self.local_dir_input.text() # Start browsing from current path
-            )
+        )
         if directory:
             self.local_dir_input.setText(directory)
 
@@ -194,11 +194,11 @@ class MainWindow(QMainWindow):
         try:
             pathlib.Path(local_dir).mkdir(parents=True, exist_ok=True)
         except OSError as e:
-             QMessageBox.critical(self, "Directory Error", f"Failed to create directory {local_dir}:\n{e}")
-             return
+            QMessageBox.critical(self, "Directory Error", f"Failed to create directory {local_dir}:\n{e}")
+            return
         if not pathlib.Path(local_dir).is_dir():
-             QMessageBox.critical(self, "Directory Error", f"Selected path {local_dir} is not a valid directory.")
-             return
+            QMessageBox.critical(self, "Directory Error", f"Selected path {local_dir} is not a valid directory.")
+            return
 
         hf_token = self.hf_token_input.text().strip() or None # Use None if empty
 
@@ -211,8 +211,8 @@ class MainWindow(QMainWindow):
         # Use provided token first, otherwise try to get from environment/login
         token_to_use = hf_token or HfFolder.get_token()
         if not token_to_use and not hf_token: # Only warn if no token was provided *and* none found automatically
-             logging.warning("HF Token not found. Accessing gated models may fail. "
-                           "Set HF_TOKEN environment variable or login via `huggingface-cli login`.")
+            logging.warning("HF Token not found. Accessing gated models may fail. "
+                            "Set HF_TOKEN environment variable or login via `huggingface-cli login`.")
 
         # Start download in a separate thread
         self.download_thread = DownloadWorker(repo_id, local_dir, token_to_use)
@@ -225,8 +225,8 @@ class MainWindow(QMainWindow):
         self.download_thread.start()
 
     def clear_progress_bars(self):
-         """Removes all widgets from the progress area layout."""
-         while self.progress_area_layout.count():
+        """Removes all widgets from the progress area layout."""
+        while self.progress_area_layout.count():
             child = self.progress_area_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater() # Ensure proper widget deletion
@@ -285,17 +285,17 @@ class MainWindow(QMainWindow):
         """Handles the window closing event."""
         if self.download_thread and self.download_thread.isRunning():
             reply = QMessageBox.question(self, 'Confirm Exit',
-                                           "A download is in progress. Are you sure you want to exit? "
-                                           "The current download may not be properly stopped.",
-                                           QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                           QMessageBox.StandardButton.No)
+                                         "A download is in progress. Are you sure you want to exit? "
+                                         "The current download may not be properly stopped.",
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                         QMessageBox.StandardButton.No)
 
             if reply == QMessageBox.StandardButton.Yes:
                 logging.info("Attempting to stop download thread on close...")
                 self.download_thread.stop()
                 # Give it a brief moment, though it might not stop snapshot_download
                 if not self.download_thread.wait(500):
-                     logging.warning("Download thread did not stop gracefully.")
+                    logging.warning("Download thread did not stop gracefully.")
                 event.accept()
             else:
                 event.ignore()
