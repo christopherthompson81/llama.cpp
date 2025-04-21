@@ -200,7 +200,7 @@ class MainWindow(QMainWindow):
              QMessageBox.critical(self, "Directory Error", f"Selected path {local_dir} is not a valid directory.")
              return
 
-       hf_token = self.hf_token_input.text().strip() or None # Use None if empty
+        hf_token = self.hf_token_input.text().strip() or None # Use None if empty
 
         # --- Start Download ---
         self.clear_progress_bars()
