@@ -84,6 +84,21 @@ class QtTqdm:
         elif not self.progress_signal:
              logging.error("QtTqdm: progress_signal_cls was not set before instantiation!")
 
+    def __iter__(self):
+        """Iteration support, yields items and updates progress."""
+        if self._iterable is None:
+            # Should not happen if used correctly by snapshot_download
+            logging.error("QtTqdm: Cannot iterate, iterable was not provided.")
+            return
+
+        # snapshot_download iterates over file downloads/transfers
+        # We update based on the iteration count, assuming each iteration is one step
+        # The actual byte progress comes from the update() calls within snapshot_download
+        for obj in self._iterable:
+            yield obj
+            # Don't call self.update(1) here, as snapshot_download calls update()
+            # internally with byte counts. Calling it here would double-count or
+            # misrepresent progress if the iterable isn't file chunks.
 
     def close(self):
         """Called when the progress bar finishes."""
