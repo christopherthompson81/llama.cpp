@@ -733,8 +733,14 @@ class MainWindow(QMainWindow):
                 # Use the received LongLong values for accurate calculation before scaling
                 # Clamp current_bytes to total_bytes before scaling
                 clamped_current = min(current_bytes, total_bytes) # Comparison works with LongLong
-                # Calculate scaled value, ensuring total_bytes is not zero. Cast operands to int for division.
-                scaled_value = int((int(clamped_current) / int(total_bytes)) * scaled_max) if int(total_bytes) > 0 else 0
+                # Calculate scaled value, ensuring total_bytes is not zero
+                # Use float division to avoid overflow with large integers
+                if total_bytes > 0:
+                    # Convert to float for division to prevent overflow
+                    ratio = float(clamped_current) / float(total_bytes)
+                    scaled_value = int(ratio * scaled_max)
+                else:
+                    scaled_value = 0
                 pbar.setValue(scaled_value) # Set scaled value
 
                 # Mark as complete if finished (using original LongLong values for check)
