@@ -289,11 +289,10 @@ class DownloadWorker(QThread):
                                 if self._save_timer:
                                     self._save_timer.cancel()
                                     self._save_timer = None
-                                # Clean up temporary file
-                                try:
-                                    os.remove(temp_file_path)
-                                except OSError:
-                                    pass
+                                # Flush the file to ensure partial data is saved for resume
+                                f.flush()
+                                os.fsync(f.fileno())
+                                logging.info(f"Partial file {temp_file_path} preserved for future resume")
                                 return # Exit run method
 
                             if chunk: # filter out keep-alive new chunks
@@ -364,34 +363,25 @@ class DownloadWorker(QThread):
 
             except requests.exceptions.RequestException as e:
                 logging.error(f"Download request failed for {filename}: {e}")
-                self.status_update.emit(f"Error downloading {filename}: {e}. Skipping.")
+                self.status_update.emit(f"Error downloading {filename}: {e}. Partial file preserved for resume.")
                 error_count += 1
-                # Clean up partial file
+                # Keep partial file for future resume attempts
                 if os.path.exists(temp_file_path):
-                    try:
-                        os.remove(temp_file_path)
-                    except OSError:
-                        pass
+                    logging.info(f"Preserved partial file {temp_file_path} for future resume")
             except IOError as e:
                 logging.error(f"File I/O error for {filename}: {e}")
-                self.status_update.emit(f"File error for {filename}: {e}. Skipping.")
+                self.status_update.emit(f"File error for {filename}: {e}. Partial file preserved for resume.")
                 error_count += 1
-                # Clean up partial file
+                # Keep partial file for future resume attempts
                 if os.path.exists(temp_file_path):
-                    try:
-                        os.remove(temp_file_path)
-                    except OSError:
-                        pass
+                    logging.info(f"Preserved partial file {temp_file_path} for future resume")
             except Exception as e:
                 logging.exception(f"An unexpected error occurred during download of {filename}")
-                self.status_update.emit(f"Unexpected error for {filename}: {e}. Skipping.")
+                self.status_update.emit(f"Unexpected error for {filename}: {e}. Partial file preserved for resume.")
                 error_count += 1
-                # Clean up partial file
+                # Keep partial file for future resume attempts
                 if os.path.exists(temp_file_path):
-                    try:
-                        os.remove(temp_file_path)
-                    except OSError:
-                        pass
+                    logging.info(f"Preserved partial file {temp_file_path} for future resume")
 
         # --- Finished ---
         if self._is_running:
