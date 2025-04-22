@@ -12,11 +12,19 @@ import logging
 import os
 import pathlib
 import sys
+from functools import partial
+
+# Import tqdm for type hinting and base class if needed, but the core logic is custom
+try:
+    from tqdm.auto import tqdm as tqdm_auto
+except ImportError:
+    logging.warning("tqdm not found. Progress bars will not be as detailed.")
+    tqdm_auto = None # Fallback or raise error? For now, fallback.
 
 from PySide6.QtCore import QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QPushButton,
+    QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, # Added QProgressBar
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 )
 from huggingface_hub import snapshot_download
@@ -25,15 +33,86 @@ from huggingface_hub.utils import HfFolder, HfHubHTTPError
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
+# --- Custom TQDM class for Qt Integration ---
+class QtTqdm:
+    """
+    A tqdm-like interface that emits Qt signals for progress updates.
+    Designed to be passed to huggingface_hub's snapshot_download tqdm_class argument.
+    """
+    def __init__(self, new_file_signal, progress_signal, *args, **kwargs):
+        self.new_file_signal = new_file_signal
+        self.progress_signal = progress_signal
+        self._total = kwargs.get('total', 0)
+        self._desc = kwargs.get('desc', '')
+        self._current = 0
+        self._unit = kwargs.get('unit', 'B') # Default to bytes
+        self._unit_scale = kwargs.get('unit_scale', True) # Default to True for auto scaling (KB, MB)
+        self._unit_divisor = kwargs.get('unit_divisor', 1024) # Default to 1024 for bytes
+
+        # Extract filename from description if possible (snapshot_download usually includes it)
+        self.filename = self._desc.split(':')[0].strip() if ':' in self._desc else self._desc
+
+        # Emit the signal for the new file/progress bar creation
+        if self.filename and self._total > 0:
+            logging.debug(f"QtTqdm: Emitting new_file_signal for {self.filename}, total={self._total}")
+            self.new_file_signal.emit(self.filename, self._total)
+        else:
+             logging.warning(f"QtTqdm: Could not determine filename or total size from desc='{self._desc}', total={self._total}")
+
+    def update(self, n=1):
+        """Updates the progress and emits the signal."""
+        self._current += n
+        # Clamp current value to total to avoid exceeding 100%
+        current_clamped = min(self._current, self._total)
+        if self.filename and self._total > 0:
+            # Emit progress signal: filename, current_bytes, total_bytes
+            self.progress_signal.emit(self.filename, current_clamped, self._total)
+
+    def close(self):
+        """Called when the progress bar finishes."""
+        # Ensure the progress bar reaches 100% on close
+        if self.filename and self._total > 0 and self._current < self._total:
+             self.progress_signal.emit(self.filename, self._total, self._total)
+        logging.debug(f"QtTqdm: Closed progress for {self.filename}")
+
+    def set_description(self, desc):
+        """Updates the description (potentially contains filename)."""
+        self._desc = desc
+        # Re-evaluate filename if description changes significantly
+        new_filename = self._desc.split(':')[0].strip() if ':' in self._desc else self._desc
+        if new_filename != self.filename:
+             logging.warning(f"QtTqdm: Description changed, filename might be updated from '{self.filename}' to '{new_filename}'")
+             # We might need more robust logic if the filename changes mid-download
+             self.filename = new_filename
+
+    # --- Dummy methods to satisfy tqdm interface ---
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def refresh(self, *args, **kwargs):
+        pass # No visual refresh needed here, signals handle updates
+
+    @classmethod
+    def set_lock(cls, lock):
+        pass # No lock needed for signal emission
+
+    @classmethod
+    def get_lock(cls):
+        pass # No lock needed
+
+
 # --- Worker Thread for Downloads ---
 class DownloadWorker(QThread):
     """
     Handles the Hugging Face model download in a separate thread
     to avoid blocking the GUI.
     """
-    # TODO: Add signals for detailed progress (new_file_signal, progress_signal)
-    # progress_signal = Signal(str, int, int) # filename, current_bytes, total_bytes
-    # new_file_signal = Signal(str, int) # filename, total_bytes
+    # Signals for detailed progress
+    progress_signal = Signal(str, int, int) # filename, current_bytes, total_bytes
+    new_file_signal = Signal(str, int) # filename, total_bytes
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
 
@@ -51,9 +130,10 @@ class DownloadWorker(QThread):
 
         self.status_update.emit(f"Starting download of {self.repo_id}...")
         try:
-            # TODO: Implement progress reporting hook if possible with snapshot_download
-            #       or switch to manual file listing and downloading for progress.
-            #       Consider using hf_transfer for potentially better performance/progress.
+            # Create a partial function for QtTqdm with the signals bound
+            # This allows snapshot_download to instantiate it correctly
+            tqdm_class_with_signals = partial(QtTqdm, self.new_file_signal, self.progress_signal)
+
             logging.info(f"Downloading {self.repo_id} to {self.local_dir}")
             path = snapshot_download(
                 repo_id=self.repo_id,
@@ -63,6 +143,7 @@ class DownloadWorker(QThread):
                 # Example: ignore pytorch_model.bin if safetensors exist
                 # ignore_patterns=["*.bin"], # Add more patterns as needed
                 resume_download=True,
+                tqdm_class=tqdm_class_with_signals if tqdm_auto else None, # Pass the custom class
                 # Consider adding user_agent
             )
             logging.info(f"Download finished. Model saved to: {path}")
@@ -218,8 +299,8 @@ class MainWindow(QMainWindow):
         self.download_thread = DownloadWorker(repo_id, local_dir, token_to_use)
         # Connect signals
         self.download_thread.status_update.connect(self.update_status)
-        # self.download_thread.new_file_signal.connect(self.add_progress_bar) # TODO
-        # self.download_thread.progress_signal.connect(self.update_progress_bar) # TODO
+        self.download_thread.new_file_signal.connect(self.add_progress_bar) # Connect new file signal
+        self.download_thread.progress_signal.connect(self.update_progress_bar) # Connect progress signal
         self.download_thread.finished_signal.connect(self.download_finished)
         self.download_thread.finished.connect(self.download_thread_cleanup) # Clean up thread object
         self.download_thread.start()
@@ -232,30 +313,65 @@ class MainWindow(QMainWindow):
                 child.widget().deleteLater() # Ensure proper widget deletion
         self.progress_bars.clear()
 
-    # --- Placeholder Slots for Progress Updates ---
-    # @Slot(str, int)
-    # def add_progress_bar(self, filename, total_bytes):
-    #     """Adds a new progress bar for a file being downloaded."""
-    #     if filename not in self.progress_bars:
-    #         label = QLabel(f"{filename} ({(total_bytes / (1024*1024)):.2f} MB)")
-    #         pbar = QProgressBar()
-    #         pbar.setMaximum(total_bytes)
-    #         pbar.setValue(0)
-    #         pbar.setTextVisible(True)
-    #         self.progress_area_layout.addWidget(label)
-    #         self.progress_area_layout.addWidget(pbar)
-    #         self.progress_bars[filename] = pbar
-    #         logging.debug(f"Added progress bar for {filename}")
+    # --- Slots for Progress Updates ---
+    @Slot(str, int)
+    def add_progress_bar(self, filename, total_bytes):
+        """Adds a new progress bar for a file being downloaded."""
+        if filename not in self.progress_bars:
+            # Use total_bytes directly, QProgressBar handles scaling display if needed
+            # Format size for label
+            if total_bytes < 1024:
+                size_str = f"{total_bytes} B"
+            elif total_bytes < 1024**2:
+                size_str = f"{total_bytes / 1024:.2f} KiB"
+            elif total_bytes < 1024**3:
+                size_str = f"{total_bytes / (1024**2):.2f} MiB"
+            else:
+                size_str = f"{total_bytes / (1024**3):.2f} GiB"
 
-    # @Slot(str, int, int)
-    # def update_progress_bar(self, filename, current_bytes, total_bytes):
-    #     """Updates the value of a specific progress bar."""
-    #     if filename in self.progress_bars:
-    #         pbar = self.progress_bars[filename]
-    #         pbar.setMaximum(total_bytes) # Ensure max is correct
-    #         pbar.setValue(current_bytes)
-    #     else:
-    #         logging.warning(f"Attempted to update progress for unknown file: {filename}")
+            label = QLabel(f"{filename} ({size_str})")
+            pbar = QProgressBar()
+            # Set range 0 to 100 for percentage display, or use bytes
+            # Using bytes might be better for large files where % increments slowly
+            pbar.setMinimum(0)
+            pbar.setMaximum(total_bytes)
+            pbar.setValue(0)
+            pbar.setTextVisible(True) # Show percentage or value/total
+            pbar.setFormat("%p%") # Show percentage
+            # Or show bytes: pbar.setFormat("%v / %m Bytes")
+
+            self.progress_area_layout.addWidget(label)
+            self.progress_area_layout.addWidget(pbar)
+            self.progress_bars[filename] = pbar
+            logging.debug(f"Added progress bar for {filename}")
+        else:
+            # If bar already exists, maybe update total size if it changed?
+            pbar = self.progress_bars[filename]
+            if pbar.maximum() != total_bytes:
+                 logging.warning(f"Updating total size for existing progress bar {filename} from {pbar.maximum()} to {total_bytes}")
+                 pbar.setMaximum(total_bytes)
+
+
+    @Slot(str, int, int)
+    def update_progress_bar(self, filename, current_bytes, total_bytes):
+        """Updates the value of a specific progress bar."""
+        if filename in self.progress_bars:
+            pbar = self.progress_bars[filename]
+            # Ensure max is correct (might be set initially or updated)
+            if pbar.maximum() != total_bytes:
+                pbar.setMaximum(total_bytes)
+            pbar.setValue(current_bytes)
+        else:
+            # This might happen if the new_file_signal arrives after the first progress_signal
+            # due to threading. Let's try adding it here as a fallback.
+            logging.warning(f"Progress update for unknown file '{filename}'. Attempting to add bar.")
+            self.add_progress_bar(filename, total_bytes)
+            # Try updating again immediately after adding
+            if filename in self.progress_bars:
+                 self.progress_bars[filename].setValue(current_bytes)
+            else:
+                 logging.error(f"Failed to add progress bar for '{filename}' during update.")
+
 
     @Slot(str)
     def update_status(self, message):
