@@ -53,11 +53,12 @@ class QtTqdm(tqdm_asyncio if tqdm_asyncio else object):
         self.new_file_signal = QtTqdm.new_file_signal_cls
         self.progress_signal = QtTqdm.progress_signal_cls
 
-        # Extract filename from description kwarg for signal emission
-        # This should contain the filename when used for actual file downloads
+        # Determine filename based on unit: if unit is bytes, desc is likely the filename
         desc = kwargs.get('desc', '')
-        self.filename = desc.split(':')[0].strip() if ':' in desc else None # Be stricter: only use if ':' is present
-        logging.debug(f"QtTqdm.__init__: Extracted filename='{self.filename}' from desc='{desc}'")
+        unit = kwargs.get('unit', 'B').lower() # Default to 'B' if unit not specified
+        # Treat desc as filename only if unit is 'b' (bytes)
+        self.filename = desc if unit == 'b' else None
+        logging.debug(f"QtTqdm.__init__: desc='{desc}', unit='{unit}', Extracted filename='{self.filename}'")
 
         # Call parent initializer (tqdm_asyncio)
         super().__init__(*args, **kwargs, disable=False) # Pass along all args/kwargs
