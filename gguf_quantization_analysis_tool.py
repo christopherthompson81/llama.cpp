@@ -14,8 +14,9 @@ import pathlib
 import sys
 import json
 import requests # Added for HTTP requests
+import time # Added for throttling progress updates
 
-from PySide6.QtCore import QThread, Signal, Slot, Qt
+from PySide6.QtCore import QThread, Signal, Slot, Qt, qint64 # Import qint64
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
@@ -33,15 +34,15 @@ class DownloadWorker(QThread):
     Handles the Hugging Face model download in a separate thread
     to avoid blocking the GUI.
     """
-    # Signals for detailed progress
+    # Signals for detailed progress - Use qint64 for large file sizes
     initial_files_signal = Signal(list) # Emits the full list of files upfront
-    progress_signal = Signal(str, int, int) # filename, current_bytes, total_bytes
-    new_file_signal = Signal(str, int) # filename, total_bytes (emitted when byte download starts)
+    progress_signal = Signal(str, qint64, qint64) # filename, current_bytes, total_bytes
+    new_file_signal = Signal(str, qint64) # filename, total_bytes (emitted when byte download starts)
     # file_checked_signal removed
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
     # Signal to mark a file as cached without downloading
-    file_cached_signal = Signal(str, int) # filename, total_bytes
+    file_cached_signal = Signal(str, qint64) # filename, total_bytes
 
     def __init__(self, repo_id, local_dir, token):
         super().__init__()
@@ -143,13 +144,59 @@ class DownloadWorker(QThread):
             # --- Download the file ---
             download_url = f"https://huggingface.co/{self.repo_id}/resolve/main/{filename}"
             temp_file_path = file_path + ".part" # Download to temporary file
+            resumed_size = 0
+            file_mode = 'wb'
+            request_headers = headers.copy() # Copy base headers
+
+            # --- Check for existing partial file and attempt resume ---
+            if os.path.exists(temp_file_path):
+                resumed_size = os.path.getsize(temp_file_path)
+                logging.info(f"Partial file '{temp_file_path}' found with size {resumed_size}. Attempting resume.")
+                request_headers["Range"] = f"bytes={resumed_size}-"
+                file_mode = 'ab' # Append mode
+            else:
+                logging.info(f"No partial file found for '{filename}'. Starting download from beginning.")
 
             try:
-                logging.info(f"Downloading '{filename}' from {download_url}")
-                with requests.get(download_url, headers=headers, stream=True, timeout=30) as response: # Added timeout
-                    response.raise_for_status() # Check for HTTP errors
+                logging.info(f"Requesting '{filename}' from {download_url} (Range: {request_headers.get('Range', 'None')})")
+                with requests.get(download_url, headers=request_headers, stream=True, timeout=30) as response:
 
-                    # Get total size from Content-Length header (fallback if API size was unknown/wrong)
+                    # Handle potential resume responses
+                    if response.status_code == 416: # Range Not Satisfiable
+                         logging.warning(f"Server returned 416 Range Not Satisfiable for {filename}. "
+                                         f"This might mean the partial file size ({resumed_size}) matches the total size. "
+                                         f"Checking local vs API size.")
+                         # Check if the existing partial file is actually complete
+                         if api_size is not None and api_size > 0 and resumed_size == api_size:
+                             logging.info(f"Partial file '{filename}' is complete ({resumed_size} bytes). Renaming.")
+                             os.rename(temp_file_path, file_path)
+                             self.file_cached_signal.emit(filename, api_size) # Treat as cached/complete
+                             continue # Skip to next file
+                         else:
+                             logging.warning(f"Partial file size {resumed_size} doesn't match API size {api_size}. "
+                                             f"Restarting download from beginning.")
+                             resumed_size = 0 # Reset resume state
+                             file_mode = 'wb' # Overwrite mode
+                             # Re-request without Range header
+                             with requests.get(download_url, headers=headers, stream=True, timeout=30) as fresh_response:
+                                 fresh_response.raise_for_status()
+                                 response = fresh_response # Use the new response object
+                                 # Proceed with download logic below...
+                    elif response.status_code == 206: # Partial Content (successful resume)
+                        logging.info(f"Server accepted resume request for '{filename}' (Status 206).")
+                    elif response.status_code == 200: # OK (full download, or server ignored Range)
+                        if resumed_size > 0:
+                            logging.warning(f"Server returned 200 OK despite Range request for '{filename}'. "
+                                            f"Restarting download from beginning.")
+                            resumed_size = 0 # Reset resume state
+                            file_mode = 'wb' # Overwrite mode
+                        else:
+                             logging.info(f"Starting full download for '{filename}' (Status 200).")
+                    else:
+                        # Raise any other non-successful status codes
+                        response.raise_for_status()
+
+                    # --- Get total size (handling potential resume) ---
                     content_length = response.headers.get('Content-Length')
                     total_size = -1 # Default to unknown size
                     if content_length is not None:
@@ -174,16 +221,24 @@ class DownloadWorker(QThread):
                          download_count += 1
                          continue # Skip to next file
 
-                    # Emit signal that download is starting (even if size is unknown)
-                    self.new_file_signal.emit(filename, total_size if total_size > 0 else 0)
+                    # Emit signal that download is starting (pass total size)
+                    # Use qint64 explicitly if needed, though Python ints should auto-promote
+                    self.new_file_signal.emit(filename, qint64(total_size if total_size > 0 else 0))
                     if not self._is_running: return # Check stop flag again
 
-                    downloaded_size = 0
-                    chunk_size = 8192 # 8 KiB chunks
-                    with open(temp_file_path, 'wb') as f:
+                    # Initialize for download loop
+                    downloaded_since_resume = 0 # Bytes downloaded in this session
+                    current_bytes = resumed_size # Total bytes in file so far
+                    chunk_size = 1024 * 1024 # Use larger 1MB chunks
+                    last_update_time = time.time()
+                    bytes_since_last_update = 0
+                    update_interval_secs = 0.2 # Update at most every 0.2 seconds
+                    update_interval_bytes = 1024 * 1024 # Or every 1MB
+
+                    with open(temp_file_path, file_mode) as f:
                         for chunk in response.iter_content(chunk_size=chunk_size):
                             if not self._is_running:
-                                logging.info(f"Download stopped during transfer of {filename}.")
+                                logging.info(f"Download stopped by user during transfer of {filename}.")
                                 # Clean up temporary file
                                 try:
                                     os.remove(temp_file_path)
@@ -192,28 +247,58 @@ class DownloadWorker(QThread):
                                 return # Exit run method
 
                             if chunk: # filter out keep-alive new chunks
+                                chunk_len = len(chunk)
                                 f.write(chunk)
-                                downloaded_size += len(chunk)
-                                # Emit progress (handle unknown total size)
-                                current_total = total_size if total_size > 0 else downloaded_size # Show increasing value if total unknown
-                                self.progress_signal.emit(filename, downloaded_size, current_total)
+                                downloaded_since_resume += chunk_len
+                                current_bytes += chunk_len
+                                bytes_since_last_update += chunk_len
+
+                                # --- Throttle progress signal emission ---
+                                current_time = time.time()
+                                time_elapsed = current_time - last_update_time
+                                should_update = False
+                                if time_elapsed >= update_interval_secs:
+                                    should_update = True
+                                elif bytes_since_last_update >= update_interval_bytes:
+                                     should_update = True
+
+                                # Also update if download is complete (current_bytes matches total_size)
+                                if total_size > 0 and current_bytes >= total_size:
+                                     should_update = True # Ensure final update is sent
+
+                                if should_update:
+                                    # Emit progress (handle unknown total size for display)
+                                    # Use qint64 explicitly if needed
+                                    display_total = qint64(total_size if total_size > 0 else current_bytes) # Show increasing value if total unknown
+                                    self.progress_signal.emit(filename, qint64(current_bytes), display_total)
+                                    last_update_time = current_time
+                                    bytes_since_last_update = 0 # Reset byte counter
 
                     # --- Final check and rename ---
-                    if total_size > 0 and downloaded_size != total_size:
-                         # Size mismatch after download
-                         raise IOError(f"Downloaded size ({downloaded_size}) does not match expected size ({total_size}) for {filename}")
+                    # Check final size against determined total_size (if known)
+                    final_size = os.path.getsize(temp_file_path)
+                    if total_size > 0 and final_size != total_size:
+                         # Size mismatch after download completion
+                         raise IOError(f"Final file size ({final_size}) does not match expected size ({total_size}) for {filename}")
+                    elif total_size <= 0:
+                         # If total size was unknown, update it now based on final size for consistency
+                         logging.info(f"Total size for '{filename}' was unknown, setting to final size: {final_size}")
+                         total_size = final_size
+                         # Optionally emit one last progress signal with the now known total size
+                         self.progress_signal.emit(filename, qint64(final_size), qint64(final_size))
 
                     # Rename temporary file to final name
                     os.rename(temp_file_path, file_path)
                     logging.info(f"Successfully downloaded and saved '{filename}'")
                     download_count += 1
 
-                    # Ensure final progress signal marks 100% if size was known
-                    if total_size > 0:
-                        self.progress_signal.emit(filename, total_size, total_size)
+                    # Ensure final progress signal marks 100% if size was known and wasn't sent in loop
+                    # (The check inside the loop should cover this, but double-check)
+                    # if total_size > 0 and bytes_since_last_update > 0: # Check if last chunk wasn't reported
+                    #    self.progress_signal.emit(filename, qint64(total_size), qint64(total_size))
 
             except requests.exceptions.RequestException as e:
-                logging.error(f"Error downloading {filename}: {e}")
+                logging.error(f"Download request failed for {filename}: {e}")
                 self.status_update.emit(f"Error downloading {filename}: {e}. Skipping.")
                 error_count += 1
                 # Clean up partial file
@@ -479,11 +564,11 @@ class MainWindow(QMainWindow):
         logging.debug(f"_create_progress_bar_widget: Created bar for '{filename}' with format '{initial_format}'")
 
 
-    @Slot(str, int)
+    @Slot(str, qint64) # Use qint64
     def add_or_update_progress_bar(self, filename, total_bytes):
         """
-        Updates a progress bar when a file download starts.
-        Called when the new_file_signal is received from QtTqdm.
+        Updates a progress bar when a file download starts (or resumes).
+        Called when the new_file_signal is received.
         """
         logging.info(f"Starting download for: {filename} ({total_bytes} bytes)")
 
@@ -529,10 +614,10 @@ class MainWindow(QMainWindow):
             if filename in self.progress_bars:
                  self.progress_bars[filename]['bar'].setValue(0)
 
-    @Slot(str, int)
+    @Slot(str, qint64) # Use qint64
     def mark_file_as_cached(self, filename, total_bytes):
         """Marks a progress bar as 'Cached' when the file already exists."""
-        logging.debug(f"Marking '{filename}' as Cached in UI.")
+        logging.debug(f"Marking '{filename}' as Cached ({total_bytes} bytes) in UI.")
         if filename in self.progress_bars:
             pbar_info = self.progress_bars[filename]
             pbar = pbar_info['bar']
@@ -565,57 +650,69 @@ class MainWindow(QMainWindow):
                      pbar.setValue(100)
 
 
-    @Slot(str, int, int)
+    @Slot(str, qint64, qint64) # Use qint64
     def update_progress_bar(self, filename, current_bytes, total_bytes):
         """Updates the value of a specific progress bar during download."""
+        # Cast to Python ints for safety in calculations/comparisons if needed,
+        # but qint64 should be handled correctly by QProgressBar.
+        current_bytes_int = int(current_bytes)
+        total_bytes_int = int(total_bytes)
+
         if filename in self.progress_bars:
             pbar_info = self.progress_bars[filename]
             pbar = pbar_info['bar']
 
-            # Handle unknown total size (total_bytes <= 0)
-            if total_bytes <= 0:
-                # If total size is unknown, use an indeterminate progress bar style
-                # or display bytes downloaded without percentage.
-                # Option 1: Indeterminate (pulsing bar) - may require style adjustments
+            # Handle unknown total size (total_bytes_int <= 0)
+            if total_bytes_int <= 0:
+                # If total size is unknown, display bytes downloaded without percentage.
+                # Option 1: Indeterminate (pulsing bar) - might be confusing with resume
                 # pbar.setRange(0, 0) # Makes it indeterminate
                 # Option 2: Show bytes downloaded
-                pbar.setMaximum(100) # Keep a fixed range for value setting
+                pbar.setMaximum(100) # Keep a fixed range for value setting? Or use large number?
                 pbar.setValue(0)     # Value doesn't represent percentage here
-                size_mib = current_bytes / (1024 * 1024)
+                size_mib = current_bytes_int / (1024 * 1024)
                 pbar.setFormat(f"Downloading: {size_mib:.2f} MiB")
             else:
                 # Known total size
-                # Ensure max is correct (might have been 100 initially)
-                if pbar.maximum() != total_bytes:
-                    logging.debug(f"update_progress_bar: Setting max size for '{filename}' to {total_bytes}")
-                    pbar.setMaximum(total_bytes)
+                # Ensure max is correct (might have been 100 initially or changed)
+                # Use total_bytes_int which is the actual total size
+                if pbar.maximum() != total_bytes_int:
+                    logging.debug(f"update_progress_bar: Setting max size for '{filename}' to {total_bytes_int}")
+                    # Set maximum using the qint64 value passed to the slot
+                    pbar.setMaximum(total_bytes) # Use the original qint64 value
                     # Ensure range is not indeterminate if size becomes known
+                    # pbar.setRange(0, 0) # Make sure it's not indeterminate
                     # pbar.setRange(0, total_bytes) # Alternative to setMaximum
 
-                # Ensure format shows downloading state if it was pending/cached/indeterminate
+                # Ensure format shows downloading percentage state if it wasn't already
                 current_format = pbar.format()
-                if current_format != "Downloading: %p%" and current_format != "Complete":
-                    logging.debug(f"update_progress_bar: Changing format for '{filename}' from '{current_format}' to Downloading.")
-                    pbar.setFormat("Downloading: %p%")
+                # Only change format if it's not already showing percentage or complete
+                if not current_format.startswith("Downloading: ") and current_format != "Complete":
+                     # Check if it's the MiB format or Pending/Cached/Skipped etc.
+                     if "%p%" not in current_format:
+                         logging.debug(f"update_progress_bar: Changing format for '{filename}' from '{current_format}' to Downloading %.")
+                         pbar.setFormat("Downloading: %p%")
 
-                # Update progress value
-                # Clamp value just in case current_bytes exceeds total_bytes slightly
-                clamped_value = min(current_bytes, total_bytes)
+                # Update progress value using the qint64 value
+                # Clamping might still be wise due to potential timing issues
+                clamped_value = min(current_bytes, total_bytes) # Use original qint64 values
                 pbar.setValue(clamped_value)
 
                 # Mark as complete if finished
-                # Use >= to handle potential overshoots or multiple final updates
-                if clamped_value >= total_bytes:
+                # Use >= to handle potential overshoots or final update timing
+                if clamped_value >= total_bytes: # Use original qint64 values
                     # Check if format is already Complete to avoid redundant logging/updates
                     if pbar.format() != "Complete":
                         pbar.setFormat("Complete")
-                        logging.debug(f"update_progress_bar: Download complete for '{filename}'")
+                        # Ensure value is exactly maximum on completion
+                        pbar.setValue(total_bytes)
+                        logging.debug(f"update_progress_bar: Download marked complete for '{filename}'")
         else:
             # Handle missing progress bar case (should be less likely now)
             logging.warning(f"update_progress_bar: Progress bar for '{filename}' not found during update. Attempting to create.")
-            # Create with appropriate state based on total_bytes
-            initial_format = "Downloading: %p%" if total_bytes > 0 else "Downloading..."
-            self._create_progress_bar_widget(filename, total_bytes, initial_format)
+            # Create with appropriate state based on total_bytes_int
+            initial_format = "Downloading: %p%" if total_bytes_int > 0 else "Downloading..."
+            self._create_progress_bar_widget(filename, total_bytes_int, initial_format)
             # Try updating again immediately after adding
             if filename in self.progress_bars:
                  # Re-call update_progress_bar to set the correct value/format
