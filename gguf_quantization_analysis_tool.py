@@ -39,9 +39,14 @@ class QtTqdm:
     A tqdm-like interface that emits Qt signals for progress updates.
     Designed to be passed to huggingface_hub's snapshot_download tqdm_class argument.
     """
-    def __init__(self, new_file_signal, progress_signal, *args, **kwargs):
-        self.new_file_signal = new_file_signal
-        self.progress_signal = progress_signal
+    # Class attributes to hold signals temporarily during download
+    new_file_signal_cls = None
+    progress_signal_cls = None
+
+    def __init__(self, *args, **kwargs):
+        # Use class attributes for signals
+        self.new_file_signal = QtTqdm.new_file_signal_cls
+        self.progress_signal = QtTqdm.progress_signal_cls
         self._total = kwargs.get('total', 0)
         self._desc = kwargs.get('desc', '')
         self._current = 0
@@ -53,10 +58,12 @@ class QtTqdm:
         self.filename = self._desc.split(':')[0].strip() if ':' in self._desc else self._desc
 
         # Emit the signal for the new file/progress bar creation
-        if self.filename and self._total > 0:
+        if self.filename and self._total > 0 and self.new_file_signal:
             logging.debug(f"QtTqdm: Emitting new_file_signal for {self.filename}, total={self._total}")
             self.new_file_signal.emit(self.filename, self._total)
-        else:
+        elif not self.new_file_signal:
+             logging.error("QtTqdm: new_file_signal_cls was not set before instantiation!")
+        else: # filename or total is missing
              logging.warning(f"QtTqdm: Could not determine filename or total size from desc='{self._desc}', total={self._total}")
 
     def update(self, n=1):
@@ -64,15 +71,21 @@ class QtTqdm:
         self._current += n
         # Clamp current value to total to avoid exceeding 100%
         current_clamped = min(self._current, self._total)
-        if self.filename and self._total > 0:
+        if self.filename and self._total > 0 and self.progress_signal:
             # Emit progress signal: filename, current_bytes, total_bytes
             self.progress_signal.emit(self.filename, current_clamped, self._total)
+        elif not self.progress_signal:
+             logging.error("QtTqdm: progress_signal_cls was not set before instantiation!")
+
 
     def close(self):
         """Called when the progress bar finishes."""
         # Ensure the progress bar reaches 100% on close
-        if self.filename and self._total > 0 and self._current < self._total:
+        if self.filename and self._total > 0 and self._current < self._total and self.progress_signal:
              self.progress_signal.emit(self.filename, self._total, self._total)
+        elif not self.progress_signal:
+             # Don't log error here as close() might be called multiple times or in cleanup
+             pass
         logging.debug(f"QtTqdm: Closed progress for {self.filename}")
 
     def set_description(self, desc):
@@ -129,11 +142,10 @@ class DownloadWorker(QThread):
             return
 
         self.status_update.emit(f"Starting download of {self.repo_id}...")
+        # Set signals as class attributes on QtTqdm before download
+        QtTqdm.new_file_signal_cls = self.new_file_signal
+        QtTqdm.progress_signal_cls = self.progress_signal
         try:
-            # Create a partial function for QtTqdm with the signals bound
-            # This allows snapshot_download to instantiate it correctly
-            tqdm_class_with_signals = partial(QtTqdm, self.new_file_signal, self.progress_signal)
-
             logging.info(f"Downloading {self.repo_id} to {self.local_dir}")
             path = snapshot_download(
                 repo_id=self.repo_id,
@@ -143,7 +155,7 @@ class DownloadWorker(QThread):
                 # Example: ignore pytorch_model.bin if safetensors exist
                 # ignore_patterns=["*.bin"], # Add more patterns as needed
                 resume_download=True,
-                tqdm_class=tqdm_class_with_signals if tqdm_auto else None, # Pass the custom class
+                tqdm_class=QtTqdm if tqdm_auto else None, # Pass the QtTqdm class directly
                 # Consider adding user_agent
             )
             logging.info(f"Download finished. Model saved to: {path}")
@@ -160,6 +172,9 @@ class DownloadWorker(QThread):
             if self._is_running:
                 self.finished_signal.emit(f"Error: {e}", True)
         finally:
+            # --- IMPORTANT: Clean up class attributes ---
+            QtTqdm.new_file_signal_cls = None
+            QtTqdm.progress_signal_cls = None
             self._is_running = False
 
     def stop(self):
