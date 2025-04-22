@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 )
-# Removed huggingface_hub and tqdm imports
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -33,11 +32,9 @@ class DownloadWorker(QThread):
     Handles the Hugging Face model download in a separate thread
     to avoid blocking the GUI.
     """
-    # Signals for detailed progress - Use int for display values
     initial_files_signal = Signal(list) # Emits the full list of files upfront
     progress_signal = Signal(str, int, int) # filename, percentage (0-100), size_in_mib
     new_file_signal = Signal(str, int) # filename, size_in_mib
-    # file_checked_signal removed
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
     # Signal to mark a file as cached without downloading
@@ -61,7 +58,7 @@ class DownloadWorker(QThread):
             headers["Authorization"] = f"Bearer {self.token}"
 
         try:
-            response = requests.get(api_url, headers=headers, timeout=10) # Added timeout
+            response = requests.get(api_url, headers=headers, timeout=10)
             response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
             repo_info = response.json()
             # Extract filenames and sizes from the 'siblings' list
@@ -119,7 +116,6 @@ class DownloadWorker(QThread):
             if not self._is_running:
                 logging.info("Download stopped by user.")
                 self.status_update.emit("Status: Download cancelled.")
-                # Don't emit finished signal here, let the main loop handle cleanup
                 return
 
             file_path = os.path.join(self.local_dir, filename)
@@ -130,7 +126,7 @@ class DownloadWorker(QThread):
                 logging.error(f"Failed to create directory for {filename}: {e}")
                 self.status_update.emit(f"Error: Could not create directory for {filename}. Skipping.")
                 error_count += 1
-                continue # Skip this file
+                continue
 
             # --- Check if file exists and size matches (basic caching) ---
             if os.path.exists(file_path):
