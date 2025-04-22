@@ -142,7 +142,9 @@ class DownloadWorker(QThread):
                 # Use API size for check if available and > 0, otherwise skip size check
                 if api_size is not None and api_size > 0 and local_size == api_size:
                     logging.info(f"File '{filename}' already exists and size matches ({api_size} bytes). Skipping download.")
-                    self.file_cached_signal.emit(filename, api_size) # Signal UI to mark as cached (remove cast)
+                    # Convert API size to MiB for display
+                    size_mib = int(api_size / (1024 * 1024)) if api_size > 0 else 0
+                    self.file_cached_signal.emit(filename, size_mib) # Signal UI to mark as cached
                     continue # Skip to next file
                 else:
                     logging.info(f"File '{filename}' exists but size mismatch (local: {local_size}, api: {api_size}) or API size unknown. Re-downloading.")
@@ -157,6 +159,17 @@ class DownloadWorker(QThread):
             if os.path.exists(temp_file_path):
                 resumed_size = os.path.getsize(temp_file_path)
                 logging.info(f"Partial file '{temp_file_path}' found with size {resumed_size}. Attempting resume.")
+                
+                # Check if the partial file might already be complete by comparing with API size
+                if api_size is not None and api_size > 0 and resumed_size == api_size:
+                    logging.info(f"Partial file '{filename}' appears to be complete ({resumed_size} bytes). Renaming to final filename.")
+                    os.rename(temp_file_path, file_path)
+                    # Convert API size to MiB for display
+                    size_mib = int(api_size / (1024 * 1024)) if api_size > 0 else 0
+                    self.file_cached_signal.emit(filename, size_mib) # Treat as cached/complete
+                    continue # Skip to next file
+                
+                # Otherwise, attempt to resume the download
                 request_headers["Range"] = f"bytes={resumed_size}-"
                 file_mode = 'ab' # Append mode
             else:
@@ -332,6 +345,15 @@ class DownloadWorker(QThread):
                         size_mib = int(final_size / (1024 * 1024))
                         # Emit final progress signal with 100% and final size in MiB
                         self.progress_signal.emit(filename, 100, size_mib)
+                    
+                    # Check if the final file already exists with the same size
+                    if os.path.exists(file_path) and os.path.getsize(file_path) == final_size:
+                        logging.info(f"Final file '{filename}' already exists with matching size. Removing temporary file.")
+                        os.remove(temp_file_path)  # Remove the temporary file
+                        # Emit final progress signal
+                        size_mib = int(final_size / (1024 * 1024))
+                        self.progress_signal.emit(filename, 100, size_mib)
+                        continue  # Skip to next file
 
                     # Cancel the timer when download is complete
                     if self._save_timer:
