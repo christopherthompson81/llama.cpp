@@ -12,7 +12,6 @@ import logging
 import os
 import pathlib
 import sys
-from functools import partial
 
 # Import tqdm for type hinting and base class if needed, but the core logic is custom
 try:
@@ -72,9 +71,9 @@ class QtTqdm:
             logging.debug(f"QtTqdm.__init__: Emitting new_file_signal for '{self.filename}', total={self._total}")
             self.new_file_signal.emit(self.filename, self._total)
         elif not self.new_file_signal:
-             logging.error("QtTqdm: new_file_signal_cls was not set before instantiation!")
+            logging.error("QtTqdm: new_file_signal_cls was not set before instantiation!")
         else: # filename or total is missing
-             logging.warning(f"QtTqdm: Could not determine filename or total size from desc='{self._desc}', total={self._total}")
+            logging.warning(f"QtTqdm: Could not determine filename or total size from desc='{self._desc}', total={self._total}")
 
     def update(self, n=1):
         """Updates the progress and emits the signal."""
@@ -88,7 +87,7 @@ class QtTqdm:
             logging.debug(f"QtTqdm.update: Emitting progress_signal for '{self.filename}': {current_clamped}/{self._total}")
             self.progress_signal.emit(self.filename, current_clamped, self._total)
         elif not self.progress_signal:
-             logging.error("QtTqdm.update: progress_signal_cls was not set before instantiation!")
+            logging.error("QtTqdm.update: progress_signal_cls was not set before instantiation!")
 
     def __iter__(self):
         """Iteration support, yields items and updates progress."""
@@ -111,16 +110,15 @@ class QtTqdm:
             # misrepresent progress if the iterable isn't file chunks.
         logging.debug(f"QtTqdm.__iter__: Finished iterating for '{self.filename}'. Total items: {item_count}")
 
-
     def close(self):
         """Called when the progress bar finishes."""
         logging.debug(f"QtTqdm.close() called for '{self.filename}'. Current: {self._current}, Total: {self._total}")
         # Ensure the progress bar reaches 100% on close
         if self.filename and self._total > 0 and self._current < self._total and self.progress_signal:
-             self.progress_signal.emit(self.filename, self._total, self._total)
+            self.progress_signal.emit(self.filename, self._total, self._total)
         elif not self.progress_signal:
-             # Don't log error here as close() might be called multiple times or in cleanup
-             pass
+            # Don't log error here as close() might be called multiple times or in cleanup
+            pass
         logging.debug(f"QtTqdm: Closed progress for {self.filename}")
 
     def set_description(self, desc):
@@ -130,9 +128,9 @@ class QtTqdm:
         # Re-evaluate filename if description changes significantly
         new_filename = self._desc.split(':')[0].strip() if ':' in self._desc else self._desc
         if new_filename != self.filename:
-             logging.warning(f"QtTqdm: Description changed, filename might be updated from '{self.filename}' to '{new_filename}'")
-             # We might need more robust logic if the filename changes mid-download
-             self.filename = new_filename
+            logging.warning(f"QtTqdm: Description changed, filename might be updated from '{self.filename}' to '{new_filename}'")
+            # We might need more robust logic if the filename changes mid-download
+            self.filename = new_filename
 
     # --- Dummy methods to satisfy tqdm interface ---
     def __enter__(self):
@@ -188,6 +186,7 @@ class DownloadWorker(QThread):
         QtTqdm.progress_signal_cls = self.progress_signal
         try:
             logging.info(f"Downloading {self.repo_id} to {self.local_dir}")
+            logging.info(f"TQDM: {tqdm_auto}")
             path = snapshot_download(
                 repo_id=self.repo_id,
                 local_dir=self.local_dir,
@@ -404,9 +403,8 @@ class MainWindow(QMainWindow):
             # If bar already exists, maybe update total size if it changed?
             pbar = self.progress_bars[filename]
             if pbar.maximum() != total_bytes:
-                 logging.warning(f"Updating total size for existing progress bar {filename} from {pbar.maximum()} to {total_bytes}")
-                 pbar.setMaximum(total_bytes)
-
+                logging.warning(f"Updating total size for existing progress bar {filename} from {pbar.maximum()} to {total_bytes}")
+                pbar.setMaximum(total_bytes)
 
     @Slot(str, int, int)
     def update_progress_bar(self, filename, current_bytes, total_bytes):
@@ -424,10 +422,9 @@ class MainWindow(QMainWindow):
             self.add_progress_bar(filename, total_bytes)
             # Try updating again immediately after adding
             if filename in self.progress_bars:
-                 self.progress_bars[filename].setValue(current_bytes)
+                self.progress_bars[filename].setValue(current_bytes)
             else:
-                 logging.error(f"Failed to add progress bar for '{filename}' during update.")
-
+                logging.error(f"Failed to add progress bar for '{filename}' during update.")
 
     @Slot(str)
     def update_status(self, message):
