@@ -171,7 +171,9 @@ class DownloadWorker(QThread):
                         if api_size is not None and api_size > 0 and resumed_size == api_size:
                             logging.info(f"Partial file '{filename}' is complete ({resumed_size} bytes). Renaming.")
                             os.rename(temp_file_path, file_path)
-                            self.file_cached_signal.emit(filename, api_size) # Treat as cached/complete (remove cast)
+                            # Convert API size to MiB for display
+                            size_mib = int(api_size / (1024 * 1024)) if api_size > 0 else 0
+                            self.file_cached_signal.emit(filename, size_mib) # Treat as cached/complete
                             continue # Skip to next file
                         else:
                             logging.warning(f"Partial file size {resumed_size} doesn't match API size {api_size}. "
@@ -240,8 +242,10 @@ class DownloadWorker(QThread):
                         download_count += 1
                         continue # Skip to next file
 
-                    # Emit signal that download is starting (pass total size, remove cast)
-                    self.new_file_signal.emit(filename, total_size if total_size > 0 else 0)
+                    # Convert total size to MiB for display before emitting
+                    size_mib = int(total_size / (1024 * 1024)) if total_size > 0 else 0
+                    # Emit signal that download is starting with size in MiB
+                    self.new_file_signal.emit(filename, size_mib)
                     if not self._is_running: return # Check stop flag again
 
                     # Initialize for download loop
@@ -285,9 +289,17 @@ class DownloadWorker(QThread):
                                     should_update = True # Ensure final update is sent
 
                                 if should_update:
-                                    # Emit progress (handle unknown total size for display, remove casts)
-                                    display_total = total_size if total_size > 0 else current_bytes # Show increasing value if total unknown
-                                    self.progress_signal.emit(filename, current_bytes, display_total)
+                                    # Calculate percentage and MiB for display
+                                    if total_size > 0:
+                                        percentage = min(100, int((current_bytes * 100) / total_size))
+                                    else:
+                                        percentage = 0
+                                    
+                                    # Convert current size to MiB for display
+                                    size_mib = int(current_bytes / (1024 * 1024))
+                                    
+                                    # Emit progress with percentage and MiB values
+                                    self.progress_signal.emit(filename, percentage, size_mib)
                                     last_update_time = current_time
                                     bytes_since_last_update = 0 # Reset byte counter
 
@@ -301,8 +313,10 @@ class DownloadWorker(QThread):
                         # If total size was unknown, update it now based on final size for consistency
                         logging.info(f"Total size for '{filename}' was unknown, setting to final size: {final_size}")
                         total_size = final_size
-                        # Optionally emit one last progress signal with the now known total size (remove casts)
-                        self.progress_signal.emit(filename, final_size, final_size)
+                        # Calculate final percentage (100%) and MiB for display
+                        size_mib = int(final_size / (1024 * 1024))
+                        # Emit final progress signal with 100% and final size in MiB
+                        self.progress_signal.emit(filename, 100, size_mib)
 
                     # Rename temporary file to final name
                     os.rename(temp_file_path, file_path)
@@ -593,8 +607,8 @@ class MainWindow(QMainWindow):
         # Extract just the filename part if it contains a path (should match QtTqdm logic)
         display_name = filename.split('/')[-1]
 
-        # Format size string using helper
-        size_str = self._format_size_string(total_bytes)
+        # Format size string directly from MiB
+        size_str = f" ({size_mib:.2f} MiB)" if size_mib > 0 else ""
 
         if filename in self.progress_bars:
             # Update existing progress bar (expected case)
@@ -606,22 +620,21 @@ class MainWindow(QMainWindow):
             label.setText(f"{display_name}{size_str}")
 
             # Update progress bar properties for download start
-            scaled_max = 10000
-            if total_bytes > 0:
-                # Ensure max is set to the scaled maximum
-                if pbar.maximum() != scaled_max:
-                    pbar.setMaximum(scaled_max)
+            if size_mib > 0:
+                # Use 100 as maximum for percentage display
+                if pbar.maximum() != 100:
+                    pbar.setMaximum(100)
                 pbar.setValue(0) # Reset to start of download
                 pbar.setFormat("Downloading: %p%") # Set downloading state
-            else: # Handle unknown size or zero-byte files
+            else: # Handle zero-byte files
                 # Use 100 for max, display appropriate format
                 if pbar.maximum() != 100:
                     pbar.setMaximum(100)
                 pbar.setValue(0)
-                if total_bytes == 0: # Specifically zero-byte
+                if size_mib == 0: # Specifically zero-byte
                     pbar.setFormat("Complete (0 B)")
                     pbar.setValue(100) # Mark as complete visually
-                else: # Unknown size (-1 or other)
+                else: # Unknown size
                     pbar.setFormat("Pending...") # Or "Downloading..." if preferred
 
             logging.debug(f"add_or_update_progress_bar: Updated bar for '{filename}' to download state.")
@@ -649,22 +662,15 @@ class MainWindow(QMainWindow):
             pbar = pbar_info['bar']
             label = pbar_info['label']
 
-            # Update label with size if not already done
+            # Update label with size in MiB if not already done
             display_name = filename.split('/')[-1]
-            size_str = self._format_size_string(total_bytes)
+            size_str = f" ({size_mib:.2f} MiB)" if size_mib > 0 else ""
             label.setText(f"{display_name}{size_str}")
 
-            # Update progress bar state using scaled max
-            scaled_max = 10000
-            if total_bytes > 0:
-                # Set to scaled max and full value
-                if pbar.maximum() != scaled_max:
-                    pbar.setMaximum(scaled_max)
-                pbar.setValue(scaled_max) # Set to 100% of scaled value
-            else: # Handle unknown or zero size (should ideally have size if cached, but handle defensively)
-                if pbar.maximum() != 100:
-                    pbar.setMaximum(100) # Use 100 base for visual completion
-                pbar.setValue(100)
+            # Update progress bar state to 100%
+            if pbar.maximum() != 100:
+                pbar.setMaximum(100)
+            pbar.setValue(100) # Set to 100%
             pbar.setFormat("Cached")
         else:
             logging.warning(f"mark_file_as_cached: Progress bar for '{filename}' not found.")
@@ -686,91 +692,36 @@ class MainWindow(QMainWindow):
     @Slot(str, int, int) # Use int instead of QMetaType.Type.LongLong
     def update_progress_bar(self, filename, current_bytes, total_bytes):
         """Updates the value of a specific progress bar during download."""
-        # Values received should be 64-bit integers (LongLong)
-        # Cast to Python ints for safety in calculations/comparisons if needed,
-        # but qint64 should be handled correctly by QProgressBar.
-        # Keep using the qint64 arguments directly for Qt calls.
-        # Use int() only for non-Qt logic if necessary.
-        # current_bytes_int = int(current_bytes) # Example if needed elsewhere
-        total_bytes_int = int(total_bytes) # Keep this for the <= 0 check logic
-
         if filename in self.progress_bars:
             pbar_info = self.progress_bars[filename]
             pbar = pbar_info['bar']
-            scaled_max = 10000
-
-            # Handle unknown total size (total_bytes_int <= 0)
-            if total_bytes_int <= 0:
-                # If total size is unknown, display bytes downloaded without percentage.
-                # Option 1: Indeterminate (pulsing bar) - might be confusing
-                # pbar.setRange(0, 0) # Makes it indeterminate
-                # Option 2: Show bytes downloaded
-                if pbar.maximum() != 100: # Ensure max is 100 for this mode
-                    pbar.setMaximum(100)
-                pbar.setValue(0)     # Value doesn't represent percentage here
-                # Use the received LongLong current_bytes for calculation, cast to int for division
-                print(f'Current Bytes: {current_bytes}; Total Bytes: {total_bytes}; Total Bytes Int: {total_bytes_int}')
-                size_mib = int(current_bytes) / (1024 * 1024)
-                print(f'Size MiB: {size_mib}')
-                pbar.setFormat(f"Downloading: {size_mib:.2f} MiB")
+            
+            # Ensure progress bar is set to use percentage (0-100)
+            if pbar.maximum() != 100:
+                pbar.setMaximum(100)
+            
+            # Set the value directly from the percentage we received
+            pbar.setValue(percentage)
+            
+            # Update the format based on state
+            if percentage < 100:
+                # Show downloading with MiB
+                pbar.setFormat(f"Downloading: {percentage}% ({size_mib:.2f} MiB)")
             else:
-                # Known total size (total_bytes_int > 0) - Use scaling
-                # Ensure max is the scaled maximum
-                if pbar.maximum() != scaled_max:
-                    logging.debug(f"update_progress_bar: Setting max size for '{filename}' to scaled {scaled_max}")
-                    pbar.setMaximum(scaled_max)
-                    # Ensure range is not indeterminate if size becomes known
-                    # pbar.setRange(0, scaled_max) # Alternative
-
-                # Ensure format shows downloading percentage state if it wasn't already
-                current_format = pbar.format()
-                # Only change format if it's not already showing percentage or complete
-                if not current_format.startswith("Downloading: ") and current_format != "Complete":
-                    # Check if it's the MiB format or Pending/Cached/Skipped etc.
-                    if "%p%" not in current_format:
-                        logging.debug(f"update_progress_bar: Changing format for '{filename}' from '{current_format}' to Downloading %.")
-                        pbar.setFormat("Downloading: %p%")
-
-                # Calculate and update scaled progress value
-                # Use the received LongLong values for accurate calculation before scaling
-                # Clamp current_bytes to total_bytes before scaling
-                clamped_current = min(current_bytes, total_bytes) # Comparison works with LongLong
-                # Calculate scaled value, ensuring total_bytes is not zero
-                # Use float division to avoid overflow with large integers
-                if total_bytes > 0:
-                    try:
-                        # Convert to float for division to prevent overflow
-                        ratio = float(clamped_current) / float(total_bytes)
-                        scaled_value = int(ratio * scaled_max)
-                    except (OverflowError, ValueError) as e:
-                        # Handle potential overflow errors with extremely large files
-                        logging.warning(f"Error calculating progress ratio: {e}. Using alternative calculation.")
-                        # Alternative calculation for very large files
-                        # Use string-based percentage calculation to avoid overflow
-                        percent_complete = 100.0 * clamped_current / total_bytes
-                        scaled_value = int((percent_complete / 100.0) * scaled_max)
-                else:
-                    scaled_value = 0
-                pbar.setValue(scaled_value) # Set scaled value
-
-                # Mark as complete if finished (using original LongLong values for check)
-                if current_bytes >= total_bytes: # Comparison works with LongLong
-                    # Check if format is already Complete to avoid redundant logging/updates
-                    if pbar.format() != "Complete":
-                        pbar.setFormat("Complete")
-                        # Ensure value is exactly maximum on completion
-                        pbar.setValue(scaled_max) # Set to scaled max
-                        logging.debug(f"update_progress_bar: Download marked complete for '{filename}'")
+                # Mark as complete if 100%
+                if pbar.format() != "Complete":
+                    pbar.setFormat("Complete")
+                    logging.debug(f"update_progress_bar: Download marked complete for '{filename}'")
         else:
             # Handle missing progress bar case (should be less likely now)
             logging.warning(f"update_progress_bar: Progress bar for '{filename}' not found during update. Attempting to create.")
-            # Create with appropriate state based on total_bytes
-            initial_format = "Downloading: %p%" if total_bytes > 0 else ("Complete (0 B)" if total_bytes == 0 else "Downloading...")
-            self._create_progress_bar_widget(filename, total_bytes, initial_format)
-            # Try updating again immediately after adding
+            # Create with appropriate state based on percentage and size_mib
+            initial_format = f"Downloading: {percentage}% ({size_mib:.2f} MiB)" if percentage < 100 else "Complete"
+            self._create_progress_bar_widget(filename, size_mib, initial_format)
+            # Set the value directly after creating
             if filename in self.progress_bars:
-                # Re-call update_progress_bar to set the correct value/format
-                self.update_progress_bar(filename, current_bytes, total_bytes)
+                pbar = self.progress_bars[filename]['bar']
+                pbar.setValue(percentage)
             else:
                 # If creation failed, log error
                 logging.error(f"update_progress_bar: Failed to create progress bar for '{filename}' during update.")
