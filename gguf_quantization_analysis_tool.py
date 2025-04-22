@@ -12,122 +12,20 @@ import logging
 import os
 import pathlib
 import sys
-
-# Import tqdm for type hinting and base class if needed
-try:
-    # Use standard tqdm for type hints if needed, but inherit from asyncio
-    from tqdm.auto import tqdm as tqdm_auto
-    from tqdm.asyncio import tqdm as tqdm_asyncio
-except ImportError:
-    logging.warning("tqdm library not found. Progress bars will not be available.")
-    tqdm_auto = None
-    tqdm_asyncio = None # Ensure this is None if import fails
+import json
+import requests # Added for HTTP requests
 
 from PySide6.QtCore import QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, # Added QProgressBar
+    QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 )
-from huggingface_hub import snapshot_download, list_repo_files # Added list_repo_files
-from huggingface_hub.utils import HfFolder, HfHubHTTPError
+# Removed huggingface_hub and tqdm imports
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-
-# --- Custom TQDM class for Qt Integration ---
-# Inherit from tqdm_asyncio if available
-class QtTqdm(tqdm_asyncio if tqdm_asyncio else object):
-    """
-    A tqdm-like class using tqdm.asyncio as a base, emitting Qt signals for progress updates
-    instead of console output. Designed for huggingface_hub's snapshot_download tqdm_class.
-    """
-    # Class attributes to hold signals temporarily during download
-    new_file_signal_cls = None
-    progress_signal_cls = None
-    # _lock is inherited from tqdm base class
-
-    def __init__(self, *args, **kwargs): # iterable is part of args/kwargs
-        logging.debug(f"QtTqdm.__init__ called. args={args}, kwargs={kwargs}")
-        # Store signals from class attributes BEFORE calling super().__init__
-        self.new_file_signal = QtTqdm.new_file_signal_cls
-        self.progress_signal = QtTqdm.progress_signal_cls
-
-        # Determine filename based on unit: if unit is bytes, desc is likely the filename
-        desc = kwargs.get('desc', '')
-        unit = kwargs.get('unit', 'B').lower()
-
-        # Better filename extraction logic
-        # Treat desc as filename only if unit is 'b' (bytes)
-        # Sometimes desc might contain path-like structures, try to get the basename
-        if unit == 'b' and desc:
-            # Extract just the filename part, not the full path if present
-            self.filename = desc.split('/')[-1]
-        else:
-            self.filename = None # Not a file download progress bar
-
-        logging.debug(f"QtTqdm.__init__: desc='{desc}', unit='{unit}', Extracted filename='{self.filename}'")
-
-        # Call parent initializer (tqdm_asyncio)
-        super().__init__(*args, **kwargs, disable=False) # Pass along all args/kwargs
-
-        # Emit new_file_signal immediately after initialization if we have a filename and size
-        # This signal marks the transition from Pending to Downloading
-        logging.debug(f"QtTqdm.__init__: Checking condition for new_file_signal: filename='{self.filename}', total={self.total}")
-        if self.filename and self.total is not None and self.total > 0:
-            if self.new_file_signal:
-                logging.info(f"QtTqdm.__init__: >>> Emitting new_file_signal: filename='{self.filename}', total={self.total}") # More visible log
-                self.new_file_signal.emit(self.filename, self.total)
-            else:
-                logging.error("QtTqdm.__init__: new_file_signal_cls was not set!")
-        elif self.filename: # Have filename but no total (e.g., total=0)
-             logging.warning(f"QtTqdm.__init__: Got filename '{self.filename}' but total is {self.total}. Not emitting new_file_signal.")
-        # else: No filename extracted, likely the initial "Fetching..." tqdm instance, ignore.
-
-
-    def display(self, msg=None, pos=None):
-        """
-        Overrides the default tqdm display method.
-        Emits a Qt signal if this instance is for a specific file download.
-        """
-        # Ensure we're emitting progress signals for file downloads
-        if self.filename and self.total is not None and self.total > 0:
-            if self.progress_signal:
-                # Clamp current value to total to avoid exceeding 100% visually
-                current_clamped = min(self.n, self.total)
-                logging.debug(f"QtTqdm.display: Emitting progress_signal for '{self.filename}': {current_clamped}/{self.total}")
-                self.progress_signal.emit(self.filename, current_clamped, self.total)
-            else:
-                logging.error("QtTqdm.display: progress_signal_cls was not set!")
-        # else: No filename or zero total, likely "Fetching..." instance or error, ignore.
-
-        # Do NOT call super().display() to avoid console output
-
-    def close(self):
-        """
-        Overrides the default tqdm close method.
-        Ensures the progress bar reaches 100% for file downloads and calls the parent close.
-        """
-        logging.debug(f"QtTqdm.close() called. Filename: '{self.filename}', n={self.n}, total={self.total}")
-        # Ensure the progress bar reaches 100% on close only if it was a file download
-        if self.filename and self.total is not None and self.total > 0:
-             if self.n < self.total: # Only emit if not already at 100%
-                 if self.progress_signal:
-                     logging.debug(f"QtTqdm.close: Emitting final (100%) progress_signal for '{self.filename}'")
-                     self.progress_signal.emit(self.filename, self.total, self.total)
-                 else:
-                     logging.error("QtTqdm.close: progress_signal_cls was not set!")
-             # Mark as complete in the UI (handled by progress signal emission)
-
-        # Call the parent class's close method to perform its cleanup
-        if tqdm_asyncio: # Check if parent class exists
-            super().close()
-        logging.debug(f"QtTqdm: Closed progress for {self.filename}")
-
-    # No need to override update, __iter__, __enter__, __exit__, refresh, set_lock, get_lock
-    # The parent tqdm class handles these. Our hook is overriding display().
-    # We also don't need set_description override if we extract filename once in init.
-
+# QtTqdm class removed
 
 # --- Worker Thread for Downloads ---
 class DownloadWorker(QThread):
@@ -142,90 +40,225 @@ class DownloadWorker(QThread):
     # file_checked_signal removed
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
+    # Signal to mark a file as cached without downloading
+    file_cached_signal = Signal(str, int) # filename, total_bytes
 
     def __init__(self, repo_id, local_dir, token):
         super().__init__()
         self.repo_id = repo_id
         self.local_dir = local_dir
-        self.token = token
-        self._is_running = True # Use a flag to signal stop if needed
+        self.token = token # HF token for authorization
+        self._is_running = True # Flag to signal stop
+
+    def _get_repo_files(self):
+        """Fetches file list and sizes from Hugging Face Hub API."""
+        api_url = f"https://huggingface.co/api/models/{self.repo_id}"
+        headers = {}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+
+        try:
+            response = requests.get(api_url, headers=headers, timeout=10) # Added timeout
+            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+            repo_info = response.json()
+            # Extract filenames and sizes from the 'siblings' list
+            files = {}
+            for file_info in repo_info.get("siblings", []):
+                filename = file_info.get("rfilename")
+                size = file_info.get("size") # Size might be None for LFS files not downloaded yet? API docs unclear.
+                if filename:
+                    # Store size, default to -1 if not available (indicates unknown size)
+                    files[filename] = size if size is not None else -1
+            logging.info(f"Found {len(files)} files in repository via API.")
+            return files
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error fetching repo info from API: {e}")
+            raise ConnectionError(f"Failed to connect to Hugging Face Hub API: {e}") from e
+        except json.JSONDecodeError as e:
+            logging.error(f"Error decoding API response: {e}")
+            raise ValueError(f"Invalid response from Hugging Face Hub API: {e}") from e
+        except Exception as e:
+            logging.exception(f"Unexpected error fetching repo files: {e}")
+            raise RuntimeError(f"An unexpected error occurred while fetching file list: {e}") from e
+
 
     def run(self):
-        """Executes the download."""
+        """Executes the download using requests."""
         if not self._is_running:
             return
 
-        self.status_update.emit(f"Listing files in {self.repo_id}...")
+        self.status_update.emit(f"Listing files in {self.repo_id} via API...")
         try:
-            # --- Get the full list of files first ---
-            logging.info(f"Calling list_repo_files for {self.repo_id}")
-            all_files = list_repo_files(repo_id=self.repo_id, token=self.token)
-            logging.info(f"Found {len(all_files)} files in repository.")
-            if self._is_running:
-                self.initial_files_signal.emit(all_files) # Emit the list to populate UI
-            else:
-                return # Stop requested before download
+            # --- Get the full list of files and sizes first ---
+            repo_files = self._get_repo_files()
+            if not self._is_running: return # Check stop flag
 
-        except HfHubHTTPError as e:
-            logging.error(f"HTTP Error listing files: {e}")
-            if self._is_running:
-                error_msg = f"Error listing files for {self.repo_id}: {e}. Check Repo ID/Token/Network."
-                self.finished_signal.emit(error_msg, True)
-            return # Cannot proceed without file list
-        except Exception as e:
-            logging.exception(f"An unexpected error occurred listing files for {self.repo_id}")
+            # Emit the list of filenames to populate UI initially
+            self.initial_files_signal.emit(list(repo_files.keys()))
+            if not self._is_running: return # Check stop flag
+
+        except (ConnectionError, ValueError, RuntimeError) as e:
+            logging.error(f"Failed to get file list: {e}")
             if self._is_running:
                 self.finished_signal.emit(f"Error listing files: {e}", True)
             return # Cannot proceed
 
-        # --- Proceed with snapshot_download ---
-        self.status_update.emit(f"Starting download/check of {len(all_files)} files for {self.repo_id}...")
-        # Set signals as class attributes on QtTqdm before download
-        QtTqdm.new_file_signal_cls = self.new_file_signal
-        QtTqdm.progress_signal_cls = self.progress_signal
-        # QtTqdm.file_checked_signal_cls removed
-        try:
-            logging.info(f"Starting snapshot_download for {self.repo_id} to {self.local_dir}")
-            # Check if tqdm and our class are available
-            effective_tqdm_class = QtTqdm if tqdm_asyncio else None
-            logging.info(f"Using tqdm_class: {effective_tqdm_class}")
-            path = snapshot_download(
-                repo_id=self.repo_id,
-                local_dir=self.local_dir,
-                local_dir_use_symlinks=False, # Avoid symlinks for simplicity across OS
-                token=self.token,
-                # Example: ignore pytorch_model.bin if safetensors exist
-                # ignore_patterns=["*.bin"], # Add more patterns as needed
-                resume_download=True,
-                tqdm_class=effective_tqdm_class, # Pass the QtTqdm class directly
-                # Consider adding user_agent
-            )
-            logging.info(f"Download finished. Model saved to: {path}")
-            if self._is_running:
-                self.finished_signal.emit(f"Download complete. Model path: {path}", False)
-        except HfHubHTTPError as e:
-            logging.error(f"HTTP Error during download: {e}")
-            if self._is_running:
-                error_msg = (f"Error downloading {self.repo_id}: {e}. "
-                             f"Check Repo ID and network. Gated model? (HF_TOKEN)")
-                self.finished_signal.emit(error_msg, True)
-        except Exception as e:
-            logging.exception(f"An unexpected error occurred during download of {self.repo_id}")
-            if self._is_running:
-                self.finished_signal.emit(f"Error: {e}", True)
-        finally:
-            # --- IMPORTANT: Clean up class attributes ---
-            QtTqdm.new_file_signal_cls = None
-            QtTqdm.progress_signal_cls = None
-            # QtTqdm.file_checked_signal_cls removed
-            self._is_running = False
+        # --- Proceed with downloading each file ---
+        self.status_update.emit(f"Starting download/check of {len(repo_files)} files for {self.repo_id}...")
+        headers = {"Accept-Encoding": "identity"} # Try to prevent compression for accurate Content-Length
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+
+        download_count = 0
+        error_count = 0
+        total_files = len(repo_files)
+
+        for filename, api_size in repo_files.items():
+            if not self._is_running:
+                logging.info("Download stopped by user.")
+                self.status_update.emit("Status: Download cancelled.")
+                # Don't emit finished signal here, let the main loop handle cleanup
+                return
+
+            file_path = os.path.join(self.local_dir, filename)
+            # Ensure subdirectory exists if filename includes path separators
+            try:
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            except OSError as e:
+                 logging.error(f"Failed to create directory for {filename}: {e}")
+                 self.status_update.emit(f"Error: Could not create directory for {filename}. Skipping.")
+                 error_count += 1
+                 continue # Skip this file
+
+            # --- Check if file exists and size matches (basic caching) ---
+            if os.path.exists(file_path):
+                local_size = os.path.getsize(file_path)
+                # Use API size for check if available and > 0, otherwise skip size check
+                if api_size is not None and api_size > 0 and local_size == api_size:
+                    logging.info(f"File '{filename}' already exists and size matches ({api_size} bytes). Skipping download.")
+                    self.file_cached_signal.emit(filename, api_size) # Signal UI to mark as cached
+                    continue # Skip to next file
+                else:
+                    logging.info(f"File '{filename}' exists but size mismatch (local: {local_size}, api: {api_size}) or API size unknown. Re-downloading.")
+            # --- Download the file ---
+            download_url = f"https://huggingface.co/{self.repo_id}/resolve/main/{filename}"
+            temp_file_path = file_path + ".part" # Download to temporary file
+
+            try:
+                logging.info(f"Downloading '{filename}' from {download_url}")
+                with requests.get(download_url, headers=headers, stream=True, timeout=30) as response: # Added timeout
+                    response.raise_for_status() # Check for HTTP errors
+
+                    # Get total size from Content-Length header (fallback if API size was unknown/wrong)
+                    content_length = response.headers.get('Content-Length')
+                    total_size = -1 # Default to unknown size
+                    if content_length is not None:
+                        try:
+                            total_size = int(content_length)
+                        except ValueError:
+                            logging.warning(f"Invalid Content-Length header for {filename}: {content_length}")
+                    elif api_size is not None and api_size > 0:
+                         total_size = api_size # Use API size if header missing/invalid
+                         logging.warning(f"Using API size ({api_size}) for {filename} as Content-Length is missing.")
+                    else:
+                         logging.warning(f"Could not determine total size for {filename} from API or headers.")
+
+
+                    if total_size == 0: # Handle zero-byte files
+                         logging.info(f"File '{filename}' is zero bytes. Creating empty file.")
+                         # Emit signals to show completion immediately
+                         self.new_file_signal.emit(filename, 0)
+                         if not self._is_running: return
+                         pathlib.Path(file_path).touch() # Create empty file directly
+                         self.progress_signal.emit(filename, 0, 0)
+                         download_count += 1
+                         continue # Skip to next file
+
+                    # Emit signal that download is starting (even if size is unknown)
+                    self.new_file_signal.emit(filename, total_size if total_size > 0 else 0)
+                    if not self._is_running: return # Check stop flag again
+
+                    downloaded_size = 0
+                    chunk_size = 8192 # 8 KiB chunks
+                    with open(temp_file_path, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=chunk_size):
+                            if not self._is_running:
+                                logging.info(f"Download stopped during transfer of {filename}.")
+                                # Clean up temporary file
+                                try:
+                                    os.remove(temp_file_path)
+                                except OSError:
+                                    pass
+                                return # Exit run method
+
+                            if chunk: # filter out keep-alive new chunks
+                                f.write(chunk)
+                                downloaded_size += len(chunk)
+                                # Emit progress (handle unknown total size)
+                                current_total = total_size if total_size > 0 else downloaded_size # Show increasing value if total unknown
+                                self.progress_signal.emit(filename, downloaded_size, current_total)
+
+                    # --- Final check and rename ---
+                    if total_size > 0 and downloaded_size != total_size:
+                         # Size mismatch after download
+                         raise IOError(f"Downloaded size ({downloaded_size}) does not match expected size ({total_size}) for {filename}")
+
+                    # Rename temporary file to final name
+                    os.rename(temp_file_path, file_path)
+                    logging.info(f"Successfully downloaded and saved '{filename}'")
+                    download_count += 1
+
+                    # Ensure final progress signal marks 100% if size was known
+                    if total_size > 0:
+                        self.progress_signal.emit(filename, total_size, total_size)
+
+            except requests.exceptions.RequestException as e:
+                logging.error(f"Error downloading {filename}: {e}")
+                self.status_update.emit(f"Error downloading {filename}: {e}. Skipping.")
+                error_count += 1
+                # Clean up partial file
+                if os.path.exists(temp_file_path):
+                    try:
+                        os.remove(temp_file_path)
+                    except OSError:
+                        pass
+            except IOError as e:
+                 logging.error(f"File I/O error for {filename}: {e}")
+                 self.status_update.emit(f"File error for {filename}: {e}. Skipping.")
+                 error_count += 1
+                 # Clean up partial file
+                 if os.path.exists(temp_file_path):
+                     try:
+                         os.remove(temp_file_path)
+                     except OSError:
+                         pass
+            except Exception as e:
+                logging.exception(f"An unexpected error occurred during download of {filename}")
+                self.status_update.emit(f"Unexpected error for {filename}: {e}. Skipping.")
+                error_count += 1
+                # Clean up partial file
+                if os.path.exists(temp_file_path):
+                    try:
+                        os.remove(temp_file_path)
+                    except OSError:
+                        pass
+
+        # --- Finished ---
+        if self._is_running:
+            final_message = f"Download process finished. {download_count}/{total_files} files downloaded."
+            if error_count > 0:
+                final_message += f" {error_count} files failed."
+                self.finished_signal.emit(final_message, True) # Signal error if any file failed
+            else:
+                self.finished_signal.emit(final_message, False) # Signal success
+
+        self._is_running = False # Mark as not running
 
     def stop(self):
-        """Signals the thread to stop."""
+        """Signals the thread to stop downloading."""
         logging.info("Stop requested for download worker.")
         self._is_running = False
-        # Note: snapshot_download might not be interruptible mid-transfer easily.
-        # This flag mainly prevents emitting signals after stop is called.
+        # The flag will be checked between chunks and between files
 
 
 # --- Main Application Window ---
@@ -348,20 +381,20 @@ class MainWindow(QMainWindow):
         self.download_button.setEnabled(False) # Disable button during download
 
         # Get token (optional, for gated models)
-        # Use provided token first, otherwise try to get from environment/login
-        token_to_use = hf_token or HfFolder.get_token()
-        if not token_to_use and not hf_token: # Only warn if no token was provided *and* none found automatically
-            logging.warning("HF Token not found. Accessing gated models may fail. "
-                            "Set HF_TOKEN environment variable or login via `huggingface-cli login`.")
+        # Use provided token if available
+        token_to_use = hf_token or os.environ.get("HF_TOKEN") # Check env var as fallback
+        if not token_to_use:
+            logging.warning("HF Token not provided and HF_TOKEN environment variable not set. "
+                            "Accessing gated models may fail.")
 
         # Start download in a separate thread
         self.download_thread = DownloadWorker(repo_id, local_dir, token_to_use)
         # Connect signals
         self.download_thread.status_update.connect(self.update_status)
-        self.download_thread.initial_files_signal.connect(self.populate_initial_progress_bars) # New signal
+        self.download_thread.initial_files_signal.connect(self.populate_initial_progress_bars)
         self.download_thread.new_file_signal.connect(self.add_or_update_progress_bar)
-        # self.download_thread.file_checked_signal connection removed
-        self.download_thread.progress_signal.connect(self.update_progress_bar) # Connect progress signal
+        self.download_thread.file_cached_signal.connect(self.mark_file_as_cached) # Connect cache signal
+        self.download_thread.progress_signal.connect(self.update_progress_bar)
         self.download_thread.finished_signal.connect(self.download_finished)
         self.download_thread.finished.connect(self.download_thread_cleanup) # Clean up thread object
         self.download_thread.start()
@@ -396,6 +429,8 @@ class MainWindow(QMainWindow):
             size_str = f"{total_bytes / (1024**2):.2f} MiB"
         else:
             size_str = f"{total_bytes / (1024**3):.2f} GiB"
+        elif total_bytes == -1: # Handle unknown size case
+            return " (Unknown size)"
 
         return f" ({size_str})"
 
@@ -431,7 +466,7 @@ class MainWindow(QMainWindow):
         label = QLabel(f"{filename}{size_str}")
         pbar = QProgressBar()
         pbar.setMinimum(0)
-        # Set max to total_bytes if known, otherwise use 100 for percentage/pending state
+        # Set max to total_bytes if known and > 0, otherwise use 100 for indeterminate/pending state
         pbar.setMaximum(total_bytes if total_bytes > 0 else 100)
         pbar.setValue(0) # Start at 0
         pbar.setTextVisible(True)
@@ -494,7 +529,41 @@ class MainWindow(QMainWindow):
             if filename in self.progress_bars:
                  self.progress_bars[filename]['bar'].setValue(0)
 
-    # Slot mark_file_as_checked removed
+    @Slot(str, int)
+    def mark_file_as_cached(self, filename, total_bytes):
+        """Marks a progress bar as 'Cached' when the file already exists."""
+        logging.debug(f"Marking '{filename}' as Cached in UI.")
+        if filename in self.progress_bars:
+            pbar_info = self.progress_bars[filename]
+            pbar = pbar_info['bar']
+            label = pbar_info['label']
+
+            # Update label with size if not already done
+            display_name = filename.split('/')[-1]
+            size_str = self._format_size_string(total_bytes)
+            label.setText(f"{display_name}{size_str}")
+
+            # Update progress bar state
+            if total_bytes > 0:
+                pbar.setMaximum(total_bytes)
+                pbar.setValue(total_bytes) # Set to 100%
+            else: # Handle unknown or zero size
+                pbar.setMaximum(100) # Use 100 base for visual completion
+                pbar.setValue(100)
+            pbar.setFormat("Cached")
+        else:
+            logging.warning(f"mark_file_as_cached: Progress bar for '{filename}' not found.")
+            # Optionally create it here if needed, marked as cached
+            self._create_progress_bar_widget(filename, total_bytes, "Cached")
+            if filename in self.progress_bars:
+                 pbar = self.progress_bars[filename]['bar']
+                 if total_bytes > 0:
+                     pbar.setMaximum(total_bytes)
+                     pbar.setValue(total_bytes)
+                 else:
+                     pbar.setMaximum(100)
+                     pbar.setValue(100)
+
 
     @Slot(str, int, int)
     def update_progress_bar(self, filename, current_bytes, total_bytes):
@@ -503,47 +572,58 @@ class MainWindow(QMainWindow):
             pbar_info = self.progress_bars[filename]
             pbar = pbar_info['bar']
 
-            # Ensure max is correct (might have been 0 or 100 initially)
-            if pbar.maximum() != total_bytes and total_bytes > 0:
-                logging.debug(f"update_progress_bar: Setting max size for '{filename}' to {total_bytes}")
-                pbar.setMaximum(total_bytes)
+            # Handle unknown total size (total_bytes <= 0)
+            if total_bytes <= 0:
+                # If total size is unknown, use an indeterminate progress bar style
+                # or display bytes downloaded without percentage.
+                # Option 1: Indeterminate (pulsing bar) - may require style adjustments
+                # pbar.setRange(0, 0) # Makes it indeterminate
+                # Option 2: Show bytes downloaded
+                pbar.setMaximum(100) # Keep a fixed range for value setting
+                pbar.setValue(0)     # Value doesn't represent percentage here
+                size_mib = current_bytes / (1024 * 1024)
+                pbar.setFormat(f"Downloading: {size_mib:.2f} MiB")
+            else:
+                # Known total size
+                # Ensure max is correct (might have been 100 initially)
+                if pbar.maximum() != total_bytes:
+                    logging.debug(f"update_progress_bar: Setting max size for '{filename}' to {total_bytes}")
+                    pbar.setMaximum(total_bytes)
+                    # Ensure range is not indeterminate if size becomes known
+                    # pbar.setRange(0, total_bytes) # Alternative to setMaximum
 
-            # Ensure format shows downloading state if it was pending
-            # Check against "Pending..." specifically
-            if pbar.format() == "Pending...":
-                logging.debug(f"update_progress_bar: Changing format for '{filename}' from Pending to Downloading.")
-                pbar.setFormat("Downloading: %p%")
+                # Ensure format shows downloading state if it was pending/cached/indeterminate
+                current_format = pbar.format()
+                if current_format != "Downloading: %p%" and current_format != "Complete":
+                    logging.debug(f"update_progress_bar: Changing format for '{filename}' from '{current_format}' to Downloading.")
+                    pbar.setFormat("Downloading: %p%")
 
-            # Update progress value
-            # Clamp value just in case current_bytes exceeds total_bytes slightly
-            clamped_value = min(current_bytes, total_bytes) if total_bytes > 0 else 0
-            pbar.setValue(clamped_value)
+                # Update progress value
+                # Clamp value just in case current_bytes exceeds total_bytes slightly
+                clamped_value = min(current_bytes, total_bytes)
+                pbar.setValue(clamped_value)
 
-            # Mark as complete if finished
-            # Use >= to handle potential overshoots or multiple final updates
-            if clamped_value >= total_bytes and total_bytes > 0:
-                # Check if format is already Complete to avoid redundant logging/updates
-                if pbar.format() != "Complete":
-                    pbar.setFormat("Complete")
-                    logging.debug(f"update_progress_bar: Download complete for '{filename}'")
+                # Mark as complete if finished
+                # Use >= to handle potential overshoots or multiple final updates
+                if clamped_value >= total_bytes:
+                    # Check if format is already Complete to avoid redundant logging/updates
+                    if pbar.format() != "Complete":
+                        pbar.setFormat("Complete")
+                        logging.debug(f"update_progress_bar: Download complete for '{filename}'")
         else:
             # Handle missing progress bar case (should be less likely now)
             logging.warning(f"update_progress_bar: Progress bar for '{filename}' not found during update. Attempting to create.")
-            # Create with downloading state directly
-            self._create_progress_bar_widget(filename, total_bytes, "Downloading: %p%")
+            # Create with appropriate state based on total_bytes
+            initial_format = "Downloading: %p%" if total_bytes > 0 else "Downloading..."
+            self._create_progress_bar_widget(filename, total_bytes, initial_format)
             # Try updating again immediately after adding
             if filename in self.progress_bars:
-                pbar = self.progress_bars[filename]['bar']
-                # Set max and value for the newly created bar
-                if pbar.maximum() != total_bytes and total_bytes > 0:
-                    pbar.setMaximum(total_bytes)
-                clamped_value = min(current_bytes, total_bytes) if total_bytes > 0 else 0
-                pbar.setValue(clamped_value)
-                if clamped_value >= total_bytes and total_bytes > 0:
-                    pbar.setFormat("Complete")
+                 # Re-call update_progress_bar to set the correct value/format
+                 self.update_progress_bar(filename, current_bytes, total_bytes)
             else:
                 # If creation failed, log error
                 logging.error(f"update_progress_bar: Failed to create progress bar for '{filename}' during update.")
+
 
     @Slot(str)
     def update_status(self, message):
@@ -556,18 +636,24 @@ class MainWindow(QMainWindow):
         """Handles the completion or error of the download thread."""
         self.update_status(f"Status: {message}")
         if is_error:
-            QMessageBox.critical(self, "Download Error", message)
-        # Regardless of error, mark pending as cached upon completion attempt
-        logging.debug("Download process finished or errored. Marking remaining pending bars as Cached.")
-        for filename, pbar_info in self.progress_bars.items():
-            if pbar_info['bar'].format() == "Pending...":
-                logging.debug(f"Marking '{filename}' as Cached post-download.")
-                pbar_info['bar'].setValue(pbar_info['bar'].maximum()) # Set to 100%
-                pbar_info['bar'].setFormat("Cached")
+            QMessageBox.warning(self, "Download Finished with Errors", message) # Use warning for partial success
+        else:
+             QMessageBox.information(self, "Download Complete", message) # Use info for success
 
+        # After download attempt, mark any remaining "Pending" bars as "Skipped" or "Unknown"
+        # (They weren't downloaded, cached, or errored specifically)
+        logging.debug("Download process finished. Updating status of any remaining pending bars.")
+        for filename, pbar_info in self.progress_bars.items():
+            pbar = pbar_info['bar']
+            if pbar.format() == "Pending...":
+                logging.debug(f"Marking '{filename}' as Skipped post-download.")
+                # Keep value at 0 or set indeterminate state? Set to Skipped format.
+                pbar.setValue(0)
+                pbar.setFormat("Skipped") # Indicate it wasn't processed
+
+        # No need to update status label again here, message box is shown
         if not is_error:
-            self.update_status(f"Status: {message}") # Show success message
-            # Optionally trigger next step for successful download
+            # Optionally trigger next step only on full success
             pass
         # Button re-enabled in cleanup (happens via download_thread_cleanup)
 
