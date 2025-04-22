@@ -196,22 +196,38 @@ class DownloadWorker(QThread):
                         # Raise any other non-successful status codes
                         response.raise_for_status()
 
-                    # --- Get total size (handling potential resume) ---
-                    content_length = response.headers.get('Content-Length')
+                    # Get total size from Content-Length/Content-Range header or API
+                    content_length_str = response.headers.get('Content-Length')
+                    content_range_str = response.headers.get('Content-Range')
                     total_size = -1 # Default to unknown size
-                    if content_length is not None:
-                        try:
-                            total_size = int(content_length)
-                        except ValueError:
-                            logging.warning(f"Invalid Content-Length header for {filename}: {content_length}")
-                    elif api_size is not None and api_size > 0:
-                         total_size = api_size # Use API size if header missing/invalid
-                         logging.warning(f"Using API size ({api_size}) for {filename} as Content-Length is missing.")
-                    else:
-                         logging.warning(f"Could not determine total size for {filename} from API or headers.")
 
+                    try:
+                        if content_range_str: # Check Content-Range first (present in 206 responses)
+                            # Format: "bytes start-end/total"
+                            total_str = content_range_str.split('/')[-1]
+                            if total_str != '*':
+                                total_size = int(total_str)
+                            else:
+                                logging.warning(f"Content-Range total size is '*' for {filename}.")
+                        elif content_length_str: # Fallback to Content-Length (present in 200 responses)
+                            # This should be the full size if status is 200
+                            total_size = int(content_length_str)
 
-                    if total_size == 0: # Handle zero-byte files
+                        # If size still unknown, try API size as last resort
+                        if total_size <= 0 and api_size is not None and api_size > 0:
+                             total_size = api_size
+                             logging.warning(f"Using API size ({api_size}) for {filename} as Content-Length/Range was missing or invalid.")
+
+                    except (ValueError, IndexError) as e:
+                        logging.warning(f"Error parsing size headers (Content-Length: '{content_length_str}', Content-Range: '{content_range_str}') for {filename}: {e}")
+                        # Try API size if parsing failed
+                        if api_size is not None and api_size > 0:
+                            total_size = api_size
+                            logging.warning(f"Using API size ({api_size}) due to header parsing error.")
+                        else:
+                            total_size = -1 # Still unknown
+
+                    if total_size == 0: # Handle zero-byte files (check after determining size)
                          logging.info(f"File '{filename}' is zero bytes. Creating empty file.")
                          # Emit signals to show completion immediately
                          self.new_file_signal.emit(filename, 0)
