@@ -33,127 +33,80 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 # --- Custom TQDM class for Qt Integration ---
-class QtTqdm:
+# Inherit from tqdm_asyncio if available
+class QtTqdm(tqdm_asyncio if tqdm_asyncio else object):
     """
-    A tqdm-like interface that emits Qt signals for progress updates.
-    Designed to be passed to huggingface_hub's snapshot_download tqdm_class argument.
+    A tqdm-like class using tqdm.asyncio as a base, emitting Qt signals for progress updates
+    instead of console output. Designed for huggingface_hub's snapshot_download tqdm_class.
     """
     # Class attributes to hold signals temporarily during download
     new_file_signal_cls = None
     progress_signal_cls = None
-    _lock = None # Dummy class attribute to satisfy huggingface_hub internal checks
+    # _lock is inherited from tqdm base class
 
-    def __init__(self, iterable=None, *args, **kwargs): # Accept iterable as first arg
-        logging.debug(f"QtTqdm.__init__ called. iterable={type(iterable)}, args={args}, kwargs={kwargs}")
-        # Use class attributes for signals
+    def __init__(self, *args, **kwargs):
+        logging.debug(f"QtTqdm.__init__ called. args={args}, kwargs={kwargs}")
+        # Store signals from class attributes BEFORE calling super().__init__
+        # as super().__init__ might trigger display() or other methods.
         self.new_file_signal = QtTqdm.new_file_signal_cls
         self.progress_signal = QtTqdm.progress_signal_cls
-        self._iterable = iterable # Store the iterable
-        self._total = kwargs.get('total', 0)
-        # If total wasn't provided but iterable has len(), use it
-        if self._total == 0 and hasattr(iterable, '__len__'):
-            try:
-                self._total = len(iterable)
-            except TypeError: # Some objects have __len__ but don't support len()
-                pass
-        self._desc = kwargs.get('desc', '')
-        self._current = 0
-        self._unit = kwargs.get('unit', 'B') # Default to bytes
-        self._unit_scale = kwargs.get('unit_scale', True) # Default to True for auto scaling (KB, MB)
-        self._unit_divisor = kwargs.get('unit_divisor', 1024) # Default to 1024 for bytes
 
-        # Extract filename from description if possible (snapshot_download usually includes it)
-        self.filename = self._desc.split(':')[0].strip() if ':' in self._desc else self._desc
-        logging.debug(f"QtTqdm.__init__: Initial state: desc='{self._desc}', total={self._total}, filename='{self.filename}', unit='{self._unit}', unit_scale={self._unit_scale}")
+        # Extract filename from description kwarg for signal emission
+        desc = kwargs.get('desc', '')
+        self.filename = desc.split(':')[0].strip() if ':' in desc else desc
+        logging.debug(f"QtTqdm.__init__: Extracted filename='{self.filename}' from desc='{desc}'")
 
-        # Emit the signal for the new file/progress bar creation
-        if self.filename and self._total > 0 and self.new_file_signal:
-            logging.debug(f"QtTqdm.__init__: Emitting new_file_signal for '{self.filename}', total={self._total}")
-            self.new_file_signal.emit(self.filename, self._total)
+        # Call parent initializer (tqdm_asyncio)
+        # We prevent console output by overriding display(), so disable=False is fine.
+        # file=sys.stderr is the default for tqdm, but it won't be used.
+        super().__init__(*args, **kwargs, disable=False) # Pass along all args/kwargs
+
+        # Emit the signal for the new file/progress bar creation AFTER super init
+        # so self.total is populated by the parent class.
+        if self.filename and self.total is not None and self.total > 0 and self.new_file_signal:
+            logging.debug(f"QtTqdm.__init__: Emitting new_file_signal for '{self.filename}', total={self.total}")
+            self.new_file_signal.emit(self.filename, self.total)
         elif not self.new_file_signal:
-            logging.error("QtTqdm: new_file_signal_cls was not set before instantiation!")
-        else: # filename or total is missing
-            logging.warning(f"QtTqdm: Could not determine filename or total size from desc='{self._desc}', total={self._total}")
+            logging.error("QtTqdm.__init__: new_file_signal_cls was not set before instantiation!")
+        else: # filename or total is missing/invalid
+            logging.warning(f"QtTqdm.__init__: Could not emit new_file_signal. filename='{self.filename}', total={self.total}")
 
-    def update(self, n=1):
-        """Updates the progress and emits the signal."""
-        logging.debug(f"QtTqdm.update(n={n}) called for '{self.filename}'. Current before: {self._current}")
-        self._current += n
-        # Clamp current value to total to avoid exceeding 100%
-        current_clamped = min(self._current, self._total)
-        logging.debug(f"QtTqdm.update: Current after: {self._current}, Clamped: {current_clamped}, Total: {self._total}")
-        if self.filename and self._total > 0 and self.progress_signal:
-            # Emit progress signal: filename, current_bytes, total_bytes
-            logging.debug(f"QtTqdm.update: Emitting progress_signal for '{self.filename}': {current_clamped}/{self._total}")
-            self.progress_signal.emit(self.filename, current_clamped, self._total)
+    def display(self, msg=None, pos=None):
+        """
+        Overrides the default tqdm display method.
+        Instead of writing to console, emits a Qt signal.
+        """
+        # self.n is the current progress count, self.total is the total count.
+        if self.filename and self.total is not None and self.total > 0 and self.progress_signal:
+            # Clamp current value to total to avoid exceeding 100% visually
+            current_clamped = min(self.n, self.total)
+            logging.debug(f"QtTqdm.display: Emitting progress_signal for '{self.filename}': {current_clamped}/{self.total}")
+            self.progress_signal.emit(self.filename, current_clamped, self.total)
         elif not self.progress_signal:
-            logging.error("QtTqdm.update: progress_signal_cls was not set before instantiation!")
-
-    def __iter__(self):
-        """Iteration support, yields items and updates progress."""
-        logging.debug(f"QtTqdm.__iter__ called for '{self.filename}'. Iterable type: {type(self._iterable)}")
-        if self._iterable is None:
-            # Should not happen if used correctly by snapshot_download
-            logging.error("QtTqdm.__iter__: Cannot iterate, iterable was not provided.")
-            return
-
-        # snapshot_download iterates over file downloads/transfers
-        # We update based on the iteration count, assuming each iteration is one step
-        # The actual byte progress comes from the update() calls within snapshot_download
-        item_count = 0
-        for obj in self._iterable:
-            logging.debug(f"QtTqdm.__iter__: Yielding item {item_count} (type: {type(obj)}) for '{self.filename}'")
-            yield obj
-            item_count += 1
-            # Don't call self.update(1) here, as snapshot_download calls update()
-            # internally with byte counts. Calling it here would double-count or
-            # misrepresent progress if the iterable isn't file chunks.
-        logging.debug(f"QtTqdm.__iter__: Finished iterating for '{self.filename}'. Total items: {item_count}")
+             logging.error("QtTqdm.display: progress_signal_cls was not set!")
+        # Do NOT call super().display() or write anything to console
 
     def close(self):
-        """Called when the progress bar finishes."""
-        logging.debug(f"QtTqdm.close() called for '{self.filename}'. Current: {self._current}, Total: {self._total}")
-        # Ensure the progress bar reaches 100% on close
-        if self.filename and self._total > 0 and self._current < self._total and self.progress_signal:
-            self.progress_signal.emit(self.filename, self._total, self._total)
+        """
+        Overrides the default tqdm close method.
+        Ensures the progress bar reaches 100% and calls the parent close.
+        """
+        logging.debug(f"QtTqdm.close() called for '{self.filename}'. Current(n): {self.n}, Total: {self.total}")
+        # Ensure the progress bar reaches 100% on close by emitting final signal
+        if self.filename and self.total is not None and self.total > 0 and self.n < self.total and self.progress_signal:
+            logging.debug(f"QtTqdm.close: Emitting final (100%) progress_signal for '{self.filename}'")
+            self.progress_signal.emit(self.filename, self.total, self.total)
         elif not self.progress_signal:
-            # Don't log error here as close() might be called multiple times or in cleanup
-            pass
+             logging.error("QtTqdm.close: progress_signal_cls was not set!")
+
+        # Call the parent class's close method to perform its cleanup
+        if tqdm_asyncio: # Check if parent class exists
+             super().close()
         logging.debug(f"QtTqdm: Closed progress for {self.filename}")
 
-    def set_description(self, desc):
-        """Updates the description (potentially contains filename)."""
-        logging.debug(f"QtTqdm.set_description called for '{self.filename}'. New desc: '{desc}'")
-        self._desc = desc
-        # Re-evaluate filename if description changes significantly
-        new_filename = self._desc.split(':')[0].strip() if ':' in self._desc else self._desc
-        if new_filename != self.filename:
-            logging.warning(f"QtTqdm: Description changed, filename might be updated from '{self.filename}' to '{new_filename}'")
-            # We might need more robust logic if the filename changes mid-download
-            self.filename = new_filename
-
-    # --- Dummy methods to satisfy tqdm interface ---
-    def __enter__(self):
-        logging.debug(f"QtTqdm.__enter__ called for '{self.filename}'")
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        logging.debug(f"QtTqdm.__exit__ called for '{self.filename}'. exc_type={exc_type}")
-        self.close()
-
-    def refresh(self, *args, **kwargs):
-        logging.debug(f"QtTqdm.refresh called for '{self.filename}' (No-op)")
-        pass # No visual refresh needed here, signals handle updates
-
-    @classmethod
-    def set_lock(cls, lock):
-        logging.debug(f"QtTqdm.set_lock called with lock: {lock}")
-        pass # No lock needed for signal emission
-
-    @classmethod
-    def get_lock(cls):
-        logging.debug("QtTqdm.get_lock called")
-        pass # No lock needed
+    # No need to override update, __iter__, __enter__, __exit__, refresh, set_lock, get_lock
+    # The parent tqdm class handles these. Our hook is overriding display().
+    # We also don't need set_description override if we extract filename once in init.
 
 
 # --- Worker Thread for Downloads ---
@@ -186,7 +139,9 @@ class DownloadWorker(QThread):
         QtTqdm.progress_signal_cls = self.progress_signal
         try:
             logging.info(f"Downloading {self.repo_id} to {self.local_dir}")
-            logging.info(f"TQDM: {tqdm_auto}")
+            # Check if tqdm and our class are available
+            effective_tqdm_class = QtTqdm if tqdm_asyncio else None
+            logging.info(f"Using tqdm_class: {effective_tqdm_class}")
             path = snapshot_download(
                 repo_id=self.repo_id,
                 local_dir=self.local_dir,
@@ -195,7 +150,7 @@ class DownloadWorker(QThread):
                 # Example: ignore pytorch_model.bin if safetensors exist
                 # ignore_patterns=["*.bin"], # Add more patterns as needed
                 resume_download=True,
-                tqdm_class=QtTqdm if tqdm_auto else None, # Pass the QtTqdm class directly
+                tqdm_class=effective_tqdm_class, # Pass the QtTqdm class directly
                 # Consider adding user_agent
             )
             logging.info(f"Download finished. Model saved to: {path}")
