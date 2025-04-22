@@ -43,11 +43,18 @@ class QtTqdm:
     new_file_signal_cls = None
     progress_signal_cls = None
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, iterable=None, *args, **kwargs): # Accept iterable as first arg
         # Use class attributes for signals
         self.new_file_signal = QtTqdm.new_file_signal_cls
         self.progress_signal = QtTqdm.progress_signal_cls
+        self._iterable = iterable # Store the iterable
         self._total = kwargs.get('total', 0)
+        # If total wasn't provided but iterable has len(), use it
+        if self._total == 0 and hasattr(iterable, '__len__'):
+            try:
+                self._total = len(iterable)
+            except TypeError: # Some objects have __len__ but don't support len()
+                pass
         self._desc = kwargs.get('desc', '')
         self._current = 0
         self._unit = kwargs.get('unit', 'B') # Default to bytes
