@@ -45,62 +45,115 @@ class QtTqdm(tqdm_asyncio if tqdm_asyncio else object):
     # Class attributes to hold signals temporarily during download
     new_file_signal_cls = None
     progress_signal_cls = None
+    file_checked_signal_cls = None # Signal for files processed in list mode
     # _lock is inherited from tqdm base class
 
-    def __init__(self, *args, **kwargs):
-        logging.debug(f"QtTqdm.__init__ called. args={args}, kwargs={kwargs}")
+    def __init__(self, iterable=None, *args, **kwargs): # Accept iterable explicitly
+        logging.debug(f"QtTqdm.__init__ called. iterable={type(iterable)}, args={args}, kwargs={kwargs}")
         # Store signals from class attributes BEFORE calling super().__init__
-        # as super().__init__ might trigger display() or other methods.
         self.new_file_signal = QtTqdm.new_file_signal_cls
         self.progress_signal = QtTqdm.progress_signal_cls
+        self.file_checked_signal = QtTqdm.file_checked_signal_cls
 
-        # Extract filename from description kwarg for signal emission
+        # Detect mode: file list ('it' unit) or byte download ('B' unit)
+        unit = kwargs.get('unit', 'B').lower() # Default to 'B' if unit not specified
+        self.is_file_list_mode = unit != 'b'
+        self._iterable_internal = iterable # Store iterable for __iter__ override
+        logging.debug(f"QtTqdm.__init__: Detected mode: {'File List' if self.is_file_list_mode else 'Byte Download'} (unit='{unit}')")
+
+        # Extract filename from description kwarg - primarily for byte download mode
         desc = kwargs.get('desc', '')
+        # In file list mode, desc might be generic like "Fetching..."
+        # In byte mode, it should contain the filename
         self.filename = desc.split(':')[0].strip() if ':' in desc else desc
-        logging.debug(f"QtTqdm.__init__: Extracted filename='{self.filename}' from desc='{desc}'")
+        if self.is_file_list_mode and self.filename == desc:
+             # Avoid using generic desc like "Fetching..." as filename
+             self.filename = None
+        logging.debug(f"QtTqdm.__init__: Initial filename='{self.filename}' from desc='{desc}'")
 
         # Call parent initializer (tqdm_asyncio)
-        # We prevent console output by overriding display(), so disable=False is fine.
-        # file=sys.stderr is the default for tqdm, but it won't be used.
-        super().__init__(*args, **kwargs, disable=False) # Pass along all args/kwargs
+        # Pass the original iterable back if it was provided
+        super().__init__(iterable=iterable, *args, **kwargs, disable=False) # Pass along all args/kwargs
 
-        # Emit the signal for the new file/progress bar creation AFTER super init
-        # so self.total is populated by the parent class.
-        if self.filename and self.total is not None and self.total > 0 and self.new_file_signal:
-            logging.debug(f"QtTqdm.__init__: Emitting new_file_signal for '{self.filename}', total={self.total}")
-            self.new_file_signal.emit(self.filename, self.total)
-        elif not self.new_file_signal:
-            logging.error("QtTqdm.__init__: new_file_signal_cls was not set before instantiation!")
-        else: # filename or total is missing/invalid
-            logging.warning(f"QtTqdm.__init__: Could not emit new_file_signal. filename='{self.filename}', total={self.total}")
+        # Emit the new_file_signal only in byte download mode AFTER super init
+        # This signal now primarily updates the total size and marks as downloading
+        if not self.is_file_list_mode and self.filename and self.total is not None and self.total > 0:
+            if self.new_file_signal:
+                logging.debug(f"QtTqdm.__init__ [Byte Mode]: Emitting new_file_signal for '{self.filename}', total={self.total}")
+                self.new_file_signal.emit(self.filename, self.total)
+            else:
+                logging.error("QtTqdm.__init__ [Byte Mode]: new_file_signal_cls was not set!")
+        elif not self.is_file_list_mode:
+             logging.warning(f"QtTqdm.__init__ [Byte Mode]: Could not emit new_file_signal. filename='{self.filename}', total={self.total}")
+
+    def __iter__(self):
+        """
+        Override iterator to emit file_checked_signal in file list mode.
+        """
+        if self.is_file_list_mode and self._iterable_internal is not None:
+            logging.debug(f"QtTqdm.__iter__ [File List Mode]: Starting iteration.")
+            count = 0
+            for item in self._iterable_internal:
+                # Assume item is the filename string in this mode
+                filename = str(item)
+                logging.debug(f"QtTqdm.__iter__ [File List Mode]: Yielding item '{filename}'")
+                yield item
+                # Emit signal AFTER yielding, indicating processing/checking is done
+                if self.file_checked_signal:
+                    logging.debug(f"QtTqdm.__iter__ [File List Mode]: Emitting file_checked_signal for '{filename}'")
+                    self.file_checked_signal.emit(filename)
+                else:
+                    logging.error("QtTqdm.__iter__ [File List Mode]: file_checked_signal_cls was not set!")
+                count += 1
+            logging.debug(f"QtTqdm.__iter__ [File List Mode]: Finished iteration. Items processed: {count}")
+        else:
+            # Default behavior for byte download mode or if no iterable
+            logging.debug(f"QtTqdm.__iter__ [Byte Mode or No Iterable]: Delegating to super().__iter__")
+            # Need to handle the case where super() doesn't have __iter__ if tqdm_asyncio is None
+            if tqdm_asyncio and hasattr(super(), '__iter__'):
+                 yield from super().__iter__()
+            elif self._iterable_internal is not None: # Fallback if no parent iter
+                 yield from self._iterable_internal
+
 
     def display(self, msg=None, pos=None):
         """
         Overrides the default tqdm display method.
-        Instead of writing to console, emits a Qt signal.
+        In byte download mode, emits a Qt signal. In file list mode, does nothing.
         """
-        # self.n is the current progress count, self.total is the total count.
-        if self.filename and self.total is not None and self.total > 0 and self.progress_signal:
-            # Clamp current value to total to avoid exceeding 100% visually
-            current_clamped = min(self.n, self.total)
-            logging.debug(f"QtTqdm.display: Emitting progress_signal for '{self.filename}': {current_clamped}/{self.total}")
-            self.progress_signal.emit(self.filename, current_clamped, self.total)
-        elif not self.progress_signal:
-            logging.error("QtTqdm.display: progress_signal_cls was not set!")
+        # Only emit progress signals in byte download mode
+        if not self.is_file_list_mode:
+            # self.n is the current progress count, self.total is the total count.
+            if self.filename and self.total is not None and self.total > 0 and self.progress_signal:
+                # Clamp current value to total to avoid exceeding 100% visually
+                current_clamped = min(self.n, self.total)
+                logging.debug(f"QtTqdm.display [Byte Mode]: Emitting progress_signal for '{self.filename}': {current_clamped}/{self.total}")
+                self.progress_signal.emit(self.filename, current_clamped, self.total)
+            elif not self.progress_signal:
+                logging.error("QtTqdm.display [Byte Mode]: progress_signal_cls was not set!")
+            # Else: No filename or zero total, cannot emit progress
+        else:
+             # Optional: Log display calls in file list mode if needed for debugging
+             # logging.debug(f"QtTqdm.display [File List Mode]: Called (n={self.n}, total={self.total}). No signal emitted.")
+             pass
+
         # Do NOT call super().display() or write anything to console
 
     def close(self):
         """
         Overrides the default tqdm close method.
-        Ensures the progress bar reaches 100% and calls the parent close.
+        Ensures the progress bar reaches 100% in byte mode and calls the parent close.
         """
-        logging.debug(f"QtTqdm.close() called for '{self.filename}'. Current(n): {self.n}, Total: {self.total}")
-        # Ensure the progress bar reaches 100% on close by emitting final signal
-        if self.filename and self.total is not None and self.total > 0 and self.n < self.total and self.progress_signal:
-            logging.debug(f"QtTqdm.close: Emitting final (100%) progress_signal for '{self.filename}'")
-            self.progress_signal.emit(self.filename, self.total, self.total)
-        elif not self.progress_signal:
-            logging.error("QtTqdm.close: progress_signal_cls was not set!")
+        logging.debug(f"QtTqdm.close() called. Mode: {'File List' if self.is_file_list_mode else 'Byte Download'}, Filename: '{self.filename}', n={self.n}, total={self.total}")
+        # Ensure the progress bar reaches 100% on close only in byte download mode
+        if not self.is_file_list_mode:
+            if self.filename and self.total is not None and self.total > 0 and self.n < self.total:
+                if self.progress_signal:
+                    logging.debug(f"QtTqdm.close [Byte Mode]: Emitting final (100%) progress_signal for '{self.filename}'")
+                    self.progress_signal.emit(self.filename, self.total, self.total)
+                else:
+                    logging.error("QtTqdm.close [Byte Mode]: progress_signal_cls was not set!")
+            # Else: No filename, zero total, or already at 100%
 
         # Call the parent class's close method to perform its cleanup
         if tqdm_asyncio: # Check if parent class exists
@@ -120,7 +173,8 @@ class DownloadWorker(QThread):
     """
     # Signals for detailed progress
     progress_signal = Signal(str, int, int) # filename, current_bytes, total_bytes
-    new_file_signal = Signal(str, int) # filename, total_bytes
+    new_file_signal = Signal(str, int) # filename, total_bytes (emitted when byte download starts)
+    file_checked_signal = Signal(str) # filename (emitted when file is checked/processed in list mode)
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
 
@@ -136,12 +190,13 @@ class DownloadWorker(QThread):
         if not self._is_running:
             return
 
-        self.status_update.emit(f"Starting download of {self.repo_id}...")
+        self.status_update.emit(f"Starting download/check of {self.repo_id}...")
         # Set signals as class attributes on QtTqdm before download
         QtTqdm.new_file_signal_cls = self.new_file_signal
         QtTqdm.progress_signal_cls = self.progress_signal
+        QtTqdm.file_checked_signal_cls = self.file_checked_signal # Set the new signal
         try:
-            logging.info(f"Downloading {self.repo_id} to {self.local_dir}")
+            logging.info(f"Starting snapshot_download for {self.repo_id} to {self.local_dir}")
             # Check if tqdm and our class are available
             effective_tqdm_class = QtTqdm if tqdm_asyncio else None
             logging.info(f"Using tqdm_class: {effective_tqdm_class}")
@@ -173,6 +228,7 @@ class DownloadWorker(QThread):
             # --- IMPORTANT: Clean up class attributes ---
             QtTqdm.new_file_signal_cls = None
             QtTqdm.progress_signal_cls = None
+            QtTqdm.file_checked_signal_cls = None # Clear the new signal
             self._is_running = False
 
     def stop(self):
@@ -252,7 +308,8 @@ class MainWindow(QMainWindow):
         self.main_layout.setStretchFactor(scroll_area, 1) # Make scroll area take available space
 
         self.download_thread = None
-        self.progress_bars = {} # Dictionary to hold progress bars {filename: QProgressBar}
+        # Dictionary holds progress bar and its label {filename: {'bar': QProgressBar, 'label': QLabel}}
+        self.progress_bars = {}
 
     @Slot()
     def browse_directory(self):
@@ -312,7 +369,8 @@ class MainWindow(QMainWindow):
         self.download_thread = DownloadWorker(repo_id, local_dir, token_to_use)
         # Connect signals
         self.download_thread.status_update.connect(self.update_status)
-        self.download_thread.new_file_signal.connect(self.add_progress_bar) # Connect new file signal
+        self.download_thread.new_file_signal.connect(self.add_or_update_progress_bar) # Renamed slot
+        self.download_thread.file_checked_signal.connect(self.mark_file_as_checked) # Connect check signal
         self.download_thread.progress_signal.connect(self.update_progress_bar) # Connect progress signal
         self.download_thread.finished_signal.connect(self.download_finished)
         self.download_thread.finished.connect(self.download_thread_cleanup) # Clean up thread object
@@ -324,65 +382,123 @@ class MainWindow(QMainWindow):
             child = self.progress_area_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater() # Ensure proper widget deletion
+        # Ensure proper widget deletion when clearing layout
+        for pbar_info in self.progress_bars.values():
+            pbar_info['bar'].deleteLater()
+            pbar_info['label'].deleteLater()
+        # Clear layout (alternative way)
+        # while self.progress_area_layout.count():
+        #     child = self.progress_area_layout.takeAt(0)
+        #     if child.widget():
+        #         child.widget().deleteLater()
         self.progress_bars.clear()
+
 
     # --- Slots for Progress Updates ---
     @Slot(str, int)
-    def add_progress_bar(self, filename, total_bytes):
-        """Adds a new progress bar for a file being downloaded."""
-        if filename not in self.progress_bars:
-            # Use total_bytes directly, QProgressBar handles scaling display if needed
-            # Format size for label
+    def add_or_update_progress_bar(self, filename, total_bytes):
+        """
+        Adds a progress bar if it doesn't exist, or updates the total size
+        and state if it does. Called when a byte download *starts*.
+        """
+        size_str = ""
+        if total_bytes > 0:
+            # Format size for label only if known
             if total_bytes < 1024:
                 size_str = f"{total_bytes} B"
             elif total_bytes < 1024**2:
                 size_str = f"{total_bytes / 1024:.2f} KiB"
             elif total_bytes < 1024**3:
                 size_str = f"{total_bytes / (1024**2):.2f} MiB"
+            elif total_bytes < 1024**3:
+                size_str = f"{total_bytes / (1024**2):.2f} MiB"
             else:
                 size_str = f"{total_bytes / (1024**3):.2f} GiB"
+            size_str = f" ({size_str})" # Add parentheses
 
-            label = QLabel(f"{filename} ({size_str})")
+        if filename not in self.progress_bars:
+            logging.debug(f"add_or_update_progress_bar: Creating new bar for '{filename}'")
+            label = QLabel(f"{filename}{size_str}") # Add size if known
             pbar = QProgressBar()
-            # Set range 0 to 100 for percentage display, or use bytes
-            # Using bytes might be better for large files where % increments slowly
             pbar.setMinimum(0)
-            pbar.setMaximum(total_bytes)
-            pbar.setValue(0)
-            pbar.setTextVisible(True) # Show percentage or value/total
-            pbar.setFormat("%p%") # Show percentage
-            # Or show bytes: pbar.setFormat("%v / %m Bytes")
+            # Set max to total_bytes if known, otherwise use 100 for percentage
+            pbar.setMaximum(total_bytes if total_bytes > 0 else 100)
+            pbar.setValue(0) # Start at 0
+            pbar.setTextVisible(True)
+            # Set format based on whether download is starting or it's just pending
+            pbar.setFormat("Downloading: %p%" if total_bytes > 0 else "Pending...")
 
+            # Store label with pbar for later updates
+            self.progress_bars[filename] = {'bar': pbar, 'label': label}
             self.progress_area_layout.addWidget(label)
             self.progress_area_layout.addWidget(pbar)
-            self.progress_bars[filename] = pbar
-            logging.debug(f"Added progress bar for {filename}")
         else:
-            # If bar already exists, maybe update total size if it changed?
-            pbar = self.progress_bars[filename]
-            if pbar.maximum() != total_bytes:
-                logging.warning(f"Updating total size for existing progress bar {filename} from {pbar.maximum()} to {total_bytes}")
-                pbar.setMaximum(total_bytes)
+            # Bar exists (likely created by mark_file_as_checked), update it
+            logging.debug(f"add_or_update_progress_bar: Updating existing bar for '{filename}'")
+            pbar_info = self.progress_bars[filename]
+            pbar = pbar_info['bar']
+            label = pbar_info['label']
+
+            label.setText(f"{filename}{size_str}") # Update label text with size
+            if total_bytes > 0 and pbar.maximum() <= 100: # Update max only if it was placeholder
+                 pbar.setMaximum(total_bytes)
+            pbar.setValue(0) # Reset value to 0 for download start
+            pbar.setFormat("Downloading: %p%") # Set format for active download
+
+    @Slot(str, int, int)
+    @Slot(str)
+    def mark_file_as_checked(self, filename):
+        """Marks a file's progress bar as 100% (cached/checked)."""
+        if filename not in self.progress_bars:
+            # File was checked but no download started yet, create bar
+            logging.debug(f"mark_file_as_checked: Creating bar for checked file '{filename}'")
+            self.add_or_update_progress_bar(filename, 0) # Create with 0 size initially
+
+        if filename in self.progress_bars:
+            logging.debug(f"mark_file_as_checked: Marking '{filename}' as 100% / Cached")
+            pbar_info = self.progress_bars[filename]
+            pbar = pbar_info['bar']
+            # Set value to max (might be 100 or actual size if updated later)
+            pbar.setValue(pbar.maximum())
+            pbar.setFormat("Cached") # Update format
+        else:
+             # Should not happen if add_or_update created it
+             logging.error(f"mark_file_as_checked: Failed to find/create progress bar for '{filename}'")
+
 
     @Slot(str, int, int)
     def update_progress_bar(self, filename, current_bytes, total_bytes):
-        """Updates the value of a specific progress bar."""
+        """Updates the value of a specific progress bar during byte download."""
         if filename in self.progress_bars:
-            pbar = self.progress_bars[filename]
-            # Ensure max is correct (might be set initially or updated)
-            if pbar.maximum() != total_bytes:
-                pbar.setMaximum(total_bytes)
+            pbar_info = self.progress_bars[filename]
+            pbar = pbar_info['bar']
+            # Ensure max is correct (might be updated by add_or_update_progress_bar)
+            if pbar.maximum() != total_bytes and total_bytes > 0:
+                 logging.warning(f"update_progress_bar: Correcting max size for '{filename}' to {total_bytes}")
+                 pbar.setMaximum(total_bytes)
+
+            # Ensure format is correct for downloading state
+            if not pbar.format().startswith("Downloading"):
+                 pbar.setFormat("Downloading: %p%")
+
             pbar.setValue(current_bytes)
+
+            # Check if download just completed
+            if current_bytes == total_bytes and total_bytes > 0:
+                 pbar.setFormat("Complete")
+                 logging.debug(f"update_progress_bar: Download complete for '{filename}'")
+
         else:
-            # This might happen if the new_file_signal arrives after the first progress_signal
-            # due to threading. Let's try adding it here as a fallback.
-            logging.warning(f"Progress update for unknown file '{filename}'. Attempting to add bar.")
-            self.add_progress_bar(filename, total_bytes)
+            # This might happen with unfortunate signal timing. Try adding it.
+            logging.warning(f"update_progress_bar: Progress update for unknown file '{filename}'. Attempting to add bar.")
+            self.add_or_update_progress_bar(filename, total_bytes)
             # Try updating again immediately after adding
             if filename in self.progress_bars:
-                self.progress_bars[filename].setValue(current_bytes)
+                self.progress_bars[filename]['bar'].setValue(current_bytes)
+                if current_bytes == total_bytes and total_bytes > 0:
+                     self.progress_bars[filename]['bar'].setFormat("Complete")
             else:
-                logging.error(f"Failed to add progress bar for '{filename}' during update.")
+                logging.error(f"update_progress_bar: Failed to add progress bar for '{filename}' during update.")
 
     @Slot(str)
     def update_status(self, message):
