@@ -418,19 +418,19 @@ class MainWindow(QMainWindow):
 
     def _format_size_string(self, total_bytes):
         """Helper to format file sizes consistently."""
-        if total_bytes <= 0:
+        if total_bytes == -1: # Handle unknown size case first
+            return " (Unknown size)"
+        elif total_bytes <= 0: # Handle zero or negative size next
             return ""
-
-        if total_bytes < 1024:
+        # Now handle positive sizes
+        elif total_bytes < 1024:
             size_str = f"{total_bytes} B"
         elif total_bytes < 1024**2:
             size_str = f"{total_bytes / 1024:.2f} KiB"
         elif total_bytes < 1024**3:
             size_str = f"{total_bytes / (1024**2):.2f} MiB"
-        else:
+        else: # total_bytes >= 1024**3
             size_str = f"{total_bytes / (1024**3):.2f} GiB"
-        elif total_bytes == -1: # Handle unknown size case
-            return " (Unknown size)"
 
         return f" ({size_str})"
 
