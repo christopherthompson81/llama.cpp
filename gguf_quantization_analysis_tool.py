@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 from huggingface_hub import snapshot_download
 from huggingface_hub.utils import HfFolder, HfHubHTTPError
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 # --- Custom TQDM class for Qt Integration ---
@@ -86,7 +86,7 @@ class QtTqdm(tqdm_asyncio if tqdm_asyncio else object):
             logging.debug(f"QtTqdm.display: Emitting progress_signal for '{self.filename}': {current_clamped}/{self.total}")
             self.progress_signal.emit(self.filename, current_clamped, self.total)
         elif not self.progress_signal:
-             logging.error("QtTqdm.display: progress_signal_cls was not set!")
+            logging.error("QtTqdm.display: progress_signal_cls was not set!")
         # Do NOT call super().display() or write anything to console
 
     def close(self):
@@ -100,11 +100,11 @@ class QtTqdm(tqdm_asyncio if tqdm_asyncio else object):
             logging.debug(f"QtTqdm.close: Emitting final (100%) progress_signal for '{self.filename}'")
             self.progress_signal.emit(self.filename, self.total, self.total)
         elif not self.progress_signal:
-             logging.error("QtTqdm.close: progress_signal_cls was not set!")
+            logging.error("QtTqdm.close: progress_signal_cls was not set!")
 
         # Call the parent class's close method to perform its cleanup
         if tqdm_asyncio: # Check if parent class exists
-             super().close()
+            super().close()
         logging.debug(f"QtTqdm: Closed progress for {self.filename}")
 
     # No need to override update, __iter__, __enter__, __exit__, refresh, set_lock, get_lock
