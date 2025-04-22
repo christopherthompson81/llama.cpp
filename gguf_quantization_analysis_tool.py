@@ -16,7 +16,7 @@ import json
 import requests # Added for HTTP requests
 import time # Added for throttling progress updates
 
-from PySide6.QtCore import QThread, Signal, Slot, Qt, QMetaType # Import qint64
+from PySide6.QtCore import QThread, Signal, Slot, Qt, QMetaType # Import QMetaType
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
