@@ -16,7 +16,7 @@ import json
 import requests # Added for HTTP requests
 import time # Added for throttling progress updates
 
-from PySide6.QtCore import QThread, Signal, Slot, Qt, QMetaType # Import QMetaType
+from PySide6.QtCore import QThread, Signal, Slot, Qt # Import QMetaType
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
@@ -294,10 +294,10 @@ class DownloadWorker(QThread):
                                         percentage = min(100, int((current_bytes * 100) / total_size))
                                     else:
                                         percentage = 0
-                                    
+
                                     # Convert current size to MiB for display
                                     size_mib = int(current_bytes / (1024 * 1024))
-                                    
+
                                     # Emit progress with percentage and MiB values
                                     self.progress_signal.emit(filename, percentage, size_mib)
                                     last_update_time = current_time
@@ -695,14 +695,14 @@ class MainWindow(QMainWindow):
         if filename in self.progress_bars:
             pbar_info = self.progress_bars[filename]
             pbar = pbar_info['bar']
-            
+
             # Ensure progress bar is set to use percentage (0-100)
             if pbar.maximum() != 100:
                 pbar.setMaximum(100)
-            
+
             # Set the value directly from the percentage we received
             pbar.setValue(percentage)
-            
+
             # Update the format based on state
             if percentage < 100:
                 # Show downloading with MiB
