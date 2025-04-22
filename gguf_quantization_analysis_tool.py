@@ -55,15 +55,23 @@ class QtTqdm(tqdm_asyncio if tqdm_asyncio else object):
 
         # Determine filename based on unit: if unit is bytes, desc is likely the filename
         desc = kwargs.get('desc', '')
-        unit = kwargs.get('unit', 'B').lower() # Default to 'B' if unit not specified
+        unit = kwargs.get('unit', 'B').lower()
+
+        # Better filename extraction logic
         # Treat desc as filename only if unit is 'b' (bytes)
-        self.filename = desc if unit == 'b' else None
+        # Sometimes desc might contain path-like structures, try to get the basename
+        if unit == 'b' and desc:
+            # Extract just the filename part, not the full path if present
+            self.filename = desc.split('/')[-1]
+        else:
+            self.filename = None # Not a file download progress bar
+
         logging.debug(f"QtTqdm.__init__: desc='{desc}', unit='{unit}', Extracted filename='{self.filename}'")
 
         # Call parent initializer (tqdm_asyncio)
         super().__init__(*args, **kwargs, disable=False) # Pass along all args/kwargs
 
-        # Emit the new_file_signal AFTER super init if we have a filename and size
+        # Emit new_file_signal immediately after initialization if we have a filename and size
         # This signal marks the transition from Pending to Downloading
         logging.debug(f"QtTqdm.__init__: Checking condition for new_file_signal: filename='{self.filename}', total={self.total}")
         if self.filename and self.total is not None and self.total > 0:
@@ -82,7 +90,7 @@ class QtTqdm(tqdm_asyncio if tqdm_asyncio else object):
         Overrides the default tqdm display method.
         Emits a Qt signal if this instance is for a specific file download.
         """
-        # Only emit progress signals if we have a filename and total > 0
+        # Ensure we're emitting progress signals for file downloads
         if self.filename and self.total is not None and self.total > 0:
             if self.progress_signal:
                 # Clamp current value to total to avoid exceeding 100% visually
@@ -93,7 +101,7 @@ class QtTqdm(tqdm_asyncio if tqdm_asyncio else object):
                 logging.error("QtTqdm.display: progress_signal_cls was not set!")
         # else: No filename or zero total, likely "Fetching..." instance or error, ignore.
 
-        # Do NOT call super().display() or write anything to console
+        # Do NOT call super().display() to avoid console output
 
     def close(self):
         """
@@ -375,6 +383,21 @@ class MainWindow(QMainWindow):
         #         child.widget().deleteLater()
         self.progress_bars.clear()
 
+    def _format_size_string(self, total_bytes):
+        """Helper to format file sizes consistently."""
+        if total_bytes <= 0:
+            return ""
+
+        if total_bytes < 1024:
+            size_str = f"{total_bytes} B"
+        elif total_bytes < 1024**2:
+            size_str = f"{total_bytes / 1024:.2f} KiB"
+        elif total_bytes < 1024**3:
+            size_str = f"{total_bytes / (1024**2):.2f} MiB"
+        else:
+            size_str = f"{total_bytes / (1024**3):.2f} GiB"
+
+        return f" ({size_str})"
 
     # --- Slots for Progress Updates ---
     @Slot(list)
@@ -424,90 +447,103 @@ class MainWindow(QMainWindow):
     @Slot(str, int)
     def add_or_update_progress_bar(self, filename, total_bytes):
         """
-        Adds a progress bar if it doesn't exist, or updates the total size
-        and state if it does. Called when a byte download *starts*.
+        Updates a progress bar when a file download starts.
+        Called when the new_file_signal is received from QtTqdm.
         """
-        logging.info(f"add_or_update_progress_bar: Received new_file_signal for filename='{filename}', total_bytes={total_bytes}") # More visible log
-        size_str = ""
-        if total_bytes > 0:
-            # Format size for label only if known
-            if total_bytes < 1024:
-                size_str = f"{total_bytes} B"
-            elif total_bytes < 1024**2:
-                size_str = f"{total_bytes / 1024:.2f} KiB"
-            elif total_bytes < 1024**3:
-                size_str = f"{total_bytes / (1024**2):.2f} MiB"
-            elif total_bytes < 1024**3:
-                size_str = f"{total_bytes / (1024**2):.2f} MiB"
+        logging.info(f"Starting download for: {filename} ({total_bytes} bytes)")
+
+        # Extract just the filename part if it contains a path (should match QtTqdm logic)
+        display_name = filename.split('/')[-1]
+
+        # Format size string using helper
+        size_str = self._format_size_string(total_bytes)
+
+        if filename in self.progress_bars:
+            # Update existing progress bar (expected case)
+            pbar_info = self.progress_bars[filename]
+            pbar = pbar_info['bar']
+            label = pbar_info['label']
+
+            # Update label with size
+            label.setText(f"{display_name}{size_str}")
+
+            # Update progress bar properties for download start
+            if total_bytes > 0:
+                # Ensure max is set correctly
+                if pbar.maximum() != total_bytes:
+                    pbar.setMaximum(total_bytes)
+                pbar.setValue(0) # Reset to start of download
+                pbar.setFormat("Downloading: %p%") # Set downloading state
             else:
-                size_str = f"{total_bytes / (1024**3):.2f} GiB"
-            size_str = f" ({size_str})" # Add parentheses
+                # Handle zero-byte files or errors? Keep pending or mark complete?
+                # For now, keep pending if max was 100, otherwise mark complete?
+                if pbar.maximum() == 100: # Was pending
+                    pbar.setFormat("Pending...") # Or maybe "Zero Size"?
+                else: # Had a previous size? Unlikely here.
+                    pbar.setFormat("Complete") # Assume complete if size is 0 now
+                pbar.setValue(0)
 
-        if filename not in self.progress_bars:
-            # Fallback: Should have been created by populate_initial_progress_bars
-            logging.warning(f"add_or_update_progress_bar: Bar for '{filename}' not found, creating now.")
-            self._create_progress_bar_widget(filename, total_bytes, "Downloading: %p%" if total_bytes > 0 else "Pending...")
-            # No need to update further if just created
-            return
+            logging.debug(f"add_or_update_progress_bar: Updated bar for '{filename}' to download state.")
 
-        # Bar exists, update it for download start
-        logging.debug(f"add_or_update_progress_bar: Updating existing bar for '{filename}' to download state.")
-        pbar_info = self.progress_bars[filename]
-        pbar = pbar_info['bar']
-        label = pbar_info['label']
-
-        label.setText(f"{filename}{size_str}") # Update label text with size
-        if total_bytes > 0:
-             # Update max only if it was placeholder (100) or different
-             if pbar.maximum() <= 100 or pbar.maximum() != total_bytes:
-                 pbar.setMaximum(total_bytes)
         else:
-             # If total_bytes is 0 here, something is odd, keep max=100
-             pbar.setMaximum(100)
-
-        pbar.setValue(0) # Reset value to 0 for download start
-        pbar.setFormat("Downloading: %p%") # Set format for active download
+            # Fallback: Create new progress bar if it wasn't created initially
+            # This might happen if list_repo_files failed or had timing issues
+            logging.warning(f"add_or_update_progress_bar: Progress bar for '{filename}' not found. Creating now.")
+            self._create_progress_bar_widget(filename, total_bytes, "Downloading: %p%" if total_bytes > 0 else "Pending...")
+            # Ensure the newly created bar reflects the current state (value 0)
+            if filename in self.progress_bars:
+                 self.progress_bars[filename]['bar'].setValue(0)
 
     # Slot mark_file_as_checked removed
 
     @Slot(str, int, int)
     def update_progress_bar(self, filename, current_bytes, total_bytes):
-        """Updates the value of a specific progress bar during byte download."""
+        """Updates the value of a specific progress bar during download."""
         if filename in self.progress_bars:
             pbar_info = self.progress_bars[filename]
             pbar = pbar_info['bar']
-            # Ensure max is correct (might be updated by add_or_update_progress_bar)
+
+            # Ensure max is correct (might have been 0 or 100 initially)
             if pbar.maximum() != total_bytes and total_bytes > 0:
-                 logging.warning(f"update_progress_bar: Correcting max size for '{filename}' to {total_bytes}")
-                 pbar.setMaximum(total_bytes)
+                logging.debug(f"update_progress_bar: Setting max size for '{filename}' to {total_bytes}")
+                pbar.setMaximum(total_bytes)
 
-            # Ensure format is correct for downloading state
-            if not pbar.format().startswith("Downloading"):
-                 pbar.setFormat("Downloading: %p%")
+            # Ensure format shows downloading state if it was pending
+            # Check against "Pending..." specifically
+            if pbar.format() == "Pending...":
+                logging.debug(f"update_progress_bar: Changing format for '{filename}' from Pending to Downloading.")
+                pbar.setFormat("Downloading: %p%")
 
-            pbar.setValue(current_bytes)
+            # Update progress value
+            # Clamp value just in case current_bytes exceeds total_bytes slightly
+            clamped_value = min(current_bytes, total_bytes) if total_bytes > 0 else 0
+            pbar.setValue(clamped_value)
 
-            # Check if download just completed
-            if current_bytes == total_bytes and total_bytes > 0:
-                 pbar.setFormat("Complete")
-                 logging.debug(f"update_progress_bar: Download complete for '{filename}'")
-
+            # Mark as complete if finished
+            # Use >= to handle potential overshoots or multiple final updates
+            if clamped_value >= total_bytes and total_bytes > 0:
+                # Check if format is already Complete to avoid redundant logging/updates
+                if pbar.format() != "Complete":
+                    pbar.setFormat("Complete")
+                    logging.debug(f"update_progress_bar: Download complete for '{filename}'")
         else:
-            # This might happen with unfortunate signal timing. Create it if missing.
-            logging.warning(f"update_progress_bar: Progress bar for '{filename}' not found. Attempting to create.")
+            # Handle missing progress bar case (should be less likely now)
+            logging.warning(f"update_progress_bar: Progress bar for '{filename}' not found during update. Attempting to create.")
             # Create with downloading state directly
             self._create_progress_bar_widget(filename, total_bytes, "Downloading: %p%")
             # Try updating again immediately after adding
             if filename in self.progress_bars:
-                 pbar = self.progress_bars[filename]['bar']
-                 if pbar.maximum() != total_bytes and total_bytes > 0:
-                      pbar.setMaximum(total_bytes)
-                 pbar.setValue(current_bytes)
-                 if current_bytes == total_bytes and total_bytes > 0:
-                      pbar.setFormat("Complete")
+                pbar = self.progress_bars[filename]['bar']
+                # Set max and value for the newly created bar
+                if pbar.maximum() != total_bytes and total_bytes > 0:
+                    pbar.setMaximum(total_bytes)
+                clamped_value = min(current_bytes, total_bytes) if total_bytes > 0 else 0
+                pbar.setValue(clamped_value)
+                if clamped_value >= total_bytes and total_bytes > 0:
+                    pbar.setFormat("Complete")
             else:
-                 # If creation failed, log error
-                 logging.error(f"update_progress_bar: Failed to create progress bar for '{filename}' during update.")
+                # If creation failed, log error
+                logging.error(f"update_progress_bar: Failed to create progress bar for '{filename}' during update.")
 
     @Slot(str)
     def update_status(self, message):
