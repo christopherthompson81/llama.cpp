@@ -511,18 +511,6 @@ class MainWindow(QMainWindow):
         pbar.setFormat("Downloading: %p%") # Set format for active download
 
 
-    @Slot(str, int, int)
-    @Slot(str)
-    def mark_file_as_checked(self, filename):
-            label = pbar_info['label']
-
-            label.setText(f"{filename}{size_str}") # Update label text with size
-            if total_bytes > 0 and pbar.maximum() <= 100: # Update max only if it was placeholder
-                 pbar.setMaximum(total_bytes)
-            pbar.setValue(0) # Reset value to 0 for download start
-            pbar.setFormat("Downloading: %p%") # Set format for active download
-
-    @Slot(str, int, int)
     @Slot(str)
     def mark_file_as_checked(self, filename):
         """Marks a file's progress bar as 100% (cached/checked)."""
