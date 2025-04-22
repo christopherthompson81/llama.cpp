@@ -207,8 +207,7 @@ class DownloadWorker(QThread):
                     content_length_str = response.headers.get('Content-Length')
                     content_range_str = response.headers.get('Content-Range')
                     total_size = -1 # Default to unknown size
-                    print(f"content_length_str: {content_length_str}; content_range_str {content_range_str}")
-
+                    
                     try:
                         if content_range_str: # Check Content-Range first (present in 206 responses)
                             # Format: "bytes start-end/total"
@@ -220,7 +219,6 @@ class DownloadWorker(QThread):
                         elif content_length_str: # Fallback to Content-Length (present in 200 responses)
                             # This should be the full size if status is 200
                             total_size = int(content_length_str)
-                            print(f"content_length_str INT: {total_size}")
 
                         # If size still unknown, try API size as last resort
                         if total_size <= 0 and api_size is not None and api_size > 0:
@@ -228,13 +226,11 @@ class DownloadWorker(QThread):
                             logging.warning(f"Using API size ({api_size}) for {filename} as Content-Length/Range was missing or invalid.")
 
                     except (ValueError, IndexError) as e:
-                        logging.warning(f"Error parsing size headers (Content-Length: '{content_length_str}', Content-Range: '{content_range_str}') for {filename}: {e}")
+                        logging.warning(f"Error parsing size headers for {filename}: {e}")
                         # Try API size if parsing failed
                         if api_size is not None and api_size > 0:
                             total_size = api_size
                             logging.warning(f"Using API size ({api_size}) due to header parsing error.")
-                        else:
-                            total_size = -1 # Still unknown
 
                     if total_size == 0: # Handle zero-byte files (check after determining size)
                         logging.info(f"File '{filename}' is zero bytes. Creating empty file.")
@@ -261,12 +257,15 @@ class DownloadWorker(QThread):
                     update_interval_secs = 0.2 # Update at most every 0.2 seconds
                     update_interval_bytes = 1024 * 1024 # Or every 1MB
 
-                    # Start periodic save timer
+                    # Define periodic save function outside the with block
                     def periodic_save():
                         if self._current_file and not self._current_file.closed:
-                            logging.debug(f"Performing periodic flush for {filename}")
-                            self._current_file.flush()
-                            os.fsync(self._current_file.fileno())
+                            try:
+                                logging.debug(f"Performing periodic flush for {filename}")
+                                self._current_file.flush()
+                                os.fsync(self._current_file.fileno())
+                            except (IOError, OSError) as e:
+                                logging.warning(f"Error during periodic flush: {e}")
                             
                             # Schedule next save if still running
                             if self._is_running:
@@ -305,24 +304,13 @@ class DownloadWorker(QThread):
                                 # --- Throttle progress signal emission ---
                                 current_time = time.time()
                                 time_elapsed = current_time - last_update_time
-                                should_update = False
-                                if time_elapsed >= update_interval_secs:
-                                    should_update = True
-                                elif bytes_since_last_update >= update_interval_bytes:
-                                    should_update = True
-
-                                # Also update if download is complete (current_bytes matches total_size)
-                                if total_size > 0 and current_bytes >= total_size:
-                                    should_update = True # Ensure final update is sent
+                                should_update = (time_elapsed >= update_interval_secs or 
+                                                bytes_since_last_update >= update_interval_bytes or
+                                                (total_size > 0 and current_bytes >= total_size))
 
                                 if should_update:
                                     # Calculate percentage and MiB for display
-                                    if total_size > 0:
-                                        percentage = min(100, int((current_bytes * 100) / total_size))
-                                    else:
-                                        percentage = 0
-
-                                    # Convert current size to MiB for display
+                                    percentage = min(100, int((current_bytes * 100) / total_size)) if total_size > 0 else 0
                                     size_mib = int(current_bytes / (1024 * 1024))
 
                                     # Emit progress with percentage and MiB values
@@ -547,38 +535,32 @@ class MainWindow(QMainWindow):
 
     def clear_progress_bars(self):
         """Removes all widgets from the progress area layout."""
+        # Clear all widgets from the layout
         while self.progress_area_layout.count():
             child = self.progress_area_layout.takeAt(0)
             if child.widget():
-                child.widget().deleteLater() # Ensure proper widget deletion
-        # Ensure proper widget deletion when clearing layout
-        for pbar_info in self.progress_bars.values():
-            pbar_info['bar'].deleteLater()
-            pbar_info['label'].deleteLater()
-        # Clear layout (alternative way)
-        # while self.progress_area_layout.count():
-        #     child = self.progress_area_layout.takeAt(0)
-        #     if child.widget():
-        #         child.widget().deleteLater()
+                child.widget().deleteLater()
+                
+        # Clear the dictionary
         self.progress_bars.clear()
 
-    def _format_size_string(self, total_bytes):
+    def _format_size_string(self, size_bytes):
         """Helper to format file sizes consistently."""
-        if total_bytes == -1: # Handle unknown size case first
+        if size_bytes == -1:
             return " (Unknown size)"
-        elif total_bytes <= 0: # Handle zero or negative size next
+        elif size_bytes <= 0:
             return ""
-        # Now handle positive sizes
-        elif total_bytes < 1024:
-            size_str = f"{total_bytes} B"
-        elif total_bytes < 1024**2:
-            size_str = f"{total_bytes / 1024:.2f} KiB"
-        elif total_bytes < 1024**3:
-            size_str = f"{total_bytes / (1024**2):.2f} MiB"
-        else: # total_bytes >= 1024**3
-            size_str = f"{total_bytes / (1024**3):.2f} GiB"
-
-        return f" ({size_str})"
+            
+        # Use a list of units and a loop for cleaner code
+        units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+        size = float(size_bytes)
+        unit_index = 0
+        
+        while size >= 1024 and unit_index < len(units) - 1:
+            size /= 1024
+            unit_index += 1
+            
+        return f" ({size:.2f} {units[unit_index]})"
 
     # --- Slots for Progress Updates ---
     @Slot(list)
@@ -594,37 +576,35 @@ class MainWindow(QMainWindow):
                 # This case should ideally not happen if clear_progress_bars worked
                 logging.warning(f"populate_initial_progress_bars: Bar for '{filename}' already exists.")
 
-    def _create_progress_bar_widget(self, filename, total_bytes, initial_format):
+    def _create_progress_bar_widget(self, filename, size_mib, initial_format):
         """Helper to create and store label/pbar widgets."""
-        size_str = ""
-        if total_bytes > 0:
-            # Format size for label only if known
-            if total_bytes < 1024:
-                size_str = f"{total_bytes} B"
-            elif total_bytes < 1024**2:
-                size_str = f"{total_bytes / 1024:.2f} KiB"
-            elif total_bytes < 1024**3:
-                size_str = f"{total_bytes / (1024**2):.2f} MiB"
-            else:
-                size_str = f"{total_bytes / (1024**3):.2f} GiB"
-            size_str = f" ({size_str})" # Add parentheses
+        # Format size string directly from MiB
+        size_str = f" ({size_mib:.2f} MiB)" if size_mib > 0 else ""
 
-        label = QLabel(f"{filename}{size_str}")
+        # Extract just the filename part for display
+        display_name = filename.split('/')[-1]
+        label = QLabel(f"{display_name}{size_str}")
+        
         pbar = QProgressBar()
         pbar.setMinimum(0)
-        # Use a scaled maximum (e.g., 10000) for known sizes to avoid overflow
-        # Use 100 for unknown sizes (pending/indeterminate state)
-        scaled_max = 10000
-        pbar.setMaximum(scaled_max if total_bytes > 0 else 100)
-        pbar.setValue(0) # Start at 0
+        pbar.setMaximum(100)  # Always use 100 for percentage-based display
+        pbar.setValue(0)  # Start at 0
         pbar.setTextVisible(True)
         pbar.setFormat(initial_format)
 
-        # Store label with pbar for later updates
-        self.progress_bars[filename] = {'bar': pbar, 'label': label}
-        self.progress_area_layout.addWidget(label)
-        self.progress_area_layout.addWidget(pbar)
-        logging.debug(f"_create_progress_bar_widget: Created bar for '{filename}' with format '{initial_format}'")
+        # Create a container widget for better organization
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(2)
+        container_layout.addWidget(label)
+        container_layout.addWidget(pbar)
+        
+        # Store label and pbar for later updates
+        self.progress_bars[filename] = {'bar': pbar, 'label': label, 'container': container}
+        self.progress_area_layout.addWidget(container)
+        
+        logging.debug(f"Created progress bar for '{filename}' with format '{initial_format}'")
 
     @Slot(str, int) # Receives filename and size_in_mib
     def add_or_update_progress_bar(self, filename, size_mib):
@@ -649,23 +629,20 @@ class MainWindow(QMainWindow):
             # Update label with size
             label.setText(f"{display_name}{size_str}")
 
+            # Ensure progress bar is set to use percentage (0-100)
+            if pbar.maximum() != 100:
+                pbar.setMaximum(100)
+                
             # Update progress bar properties for download start
             if size_mib > 0:
-                # Use 100 as maximum for percentage display
-                if pbar.maximum() != 100:
-                    pbar.setMaximum(100)
                 pbar.setValue(0) # Reset to start of download
                 pbar.setFormat("Downloading: %p%") # Set downloading state
-            else: # Handle zero-byte files
-                # Use 100 for max, display appropriate format
-                if pbar.maximum() != 100:
-                    pbar.setMaximum(100)
+            elif size_mib == 0: # Specifically zero-byte
+                pbar.setValue(100) # Mark as complete visually
+                pbar.setFormat("Complete (0 B)")
+            else: # Unknown size
                 pbar.setValue(0)
-                if size_mib == 0: # Specifically zero-byte
-                    pbar.setFormat("Complete (0 B)")
-                    pbar.setValue(100) # Mark as complete visually
-                else: # Unknown size
-                    pbar.setFormat("Pending...") # Or "Downloading..." if preferred
+                pbar.setFormat("Pending...")
 
             logging.debug(f"add_or_update_progress_bar: Updated bar for '{filename}' to download state.")
 
@@ -708,16 +685,10 @@ class MainWindow(QMainWindow):
             self._create_progress_bar_widget(filename, size_mib, "Cached")
             if filename in self.progress_bars:
                 pbar = self.progress_bars[filename]['bar']
-                pbar = self.progress_bars[filename]['bar']
-                scaled_max = 10000
-                if size_mib > 0:
-                    if pbar.maximum() != scaled_max:
-                        pbar.setMaximum(scaled_max)
-                    pbar.setValue(scaled_max)
-                else:
-                    if pbar.maximum() != 100:
-                        pbar.setMaximum(100)
-                    pbar.setValue(100)
+                # Ensure progress bar is set to use percentage (0-100)
+                if pbar.maximum() != 100:
+                    pbar.setMaximum(100)
+                pbar.setValue(100) # Set to 100%
 
     @Slot(str, int, int) # Receives filename, percentage (0-100), and size_in_mib
     def update_progress_bar(self, filename, percentage, size_mib):
