@@ -596,8 +596,8 @@ class MainWindow(QMainWindow):
         self.progress_area_layout.addWidget(pbar)
         logging.debug(f"_create_progress_bar_widget: Created bar for '{filename}' with format '{initial_format}'")
 
-    @Slot(str, int) # Use int instead of QMetaType.Type.LongLong
-    def add_or_update_progress_bar(self, filename, total_bytes):
+    @Slot(str, int) # Receives filename and size_in_mib
+    def add_or_update_progress_bar(self, filename, size_mib):
         """
         Updates a progress bar when a file download starts (or resumes).
         Called when the new_file_signal is received.
@@ -653,8 +653,8 @@ class MainWindow(QMainWindow):
                 else:
                     new_pbar.setValue(0)
 
-    @Slot(str, int) # Use int instead of QMetaType.Type.LongLong
-    def mark_file_as_cached(self, filename, total_bytes):
+    @Slot(str, int) # Receives filename and size_in_mib
+    def mark_file_as_cached(self, filename, size_mib):
         """Marks a progress bar as 'Cached' when the file already exists."""
         logging.debug(f"Marking '{filename}' as Cached ({total_bytes} bytes) in UI.")
         if filename in self.progress_bars:
@@ -689,8 +689,8 @@ class MainWindow(QMainWindow):
                         pbar.setMaximum(100)
                     pbar.setValue(100)
 
-    @Slot(str, int, int) # Use int instead of QMetaType.Type.LongLong
-    def update_progress_bar(self, filename, current_bytes, total_bytes):
+    @Slot(str, int, int) # Receives filename, percentage (0-100), and size_in_mib
+    def update_progress_bar(self, filename, percentage, size_mib):
         """Updates the value of a specific progress bar during download."""
         if filename in self.progress_bars:
             pbar_info = self.progress_bars[filename]
