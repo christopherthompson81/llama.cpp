@@ -36,15 +36,15 @@ class DownloadWorker(QThread):
     Handles the Hugging Face model download in a separate thread
     to avoid blocking the GUI.
     """
-    # Signals for detailed progress - Use QMetaType.LongLong for large file sizes
+    # Signals for detailed progress - Use QMetaType.Type.LongLong for large file sizes
     initial_files_signal = Signal(list) # Emits the full list of files upfront
-    progress_signal = Signal(str, QMetaType.LongLong, QMetaType.LongLong) # filename, current_bytes, total_bytes
-    new_file_signal = Signal(str, QMetaType.LongLong) # filename, total_bytes (emitted when byte download starts)
+    progress_signal = Signal(str, QMetaType.Type.LongLong, QMetaType.Type.LongLong) # filename, current_bytes, total_bytes
+    new_file_signal = Signal(str, QMetaType.Type.LongLong) # filename, total_bytes (emitted when byte download starts)
     # file_checked_signal removed
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
     # Signal to mark a file as cached without downloading
-    file_cached_signal = Signal(str, QMetaType.LongLong) # filename, total_bytes
+    file_cached_signal = Signal(str, QMetaType.Type.LongLong) # filename, total_bytes
 
     def __init__(self, repo_id, local_dir, token):
         super().__init__()
@@ -580,7 +580,7 @@ class MainWindow(QMainWindow):
         self.progress_area_layout.addWidget(pbar)
         logging.debug(f"_create_progress_bar_widget: Created bar for '{filename}' with format '{initial_format}'")
 
-    @Slot(str, QMetaType.LongLong) # Use QMetaType.LongLong
+    @Slot(str, QMetaType.Type.LongLong) # Use QMetaType.Type.LongLong
     def add_or_update_progress_bar(self, filename, total_bytes):
         """
         Updates a progress bar when a file download starts (or resumes).
@@ -632,14 +632,13 @@ class MainWindow(QMainWindow):
             self._create_progress_bar_widget(filename, total_bytes, initial_format)
             # Ensure the newly created bar reflects the current state (value 0 or 100 for 0 B)
             if filename in self.progress_bars:
-                 new_pbar = self.progress_bars[filename]['bar']
-                 if total_bytes == 0:
-                     new_pbar.setValue(new_pbar.maximum()) # Set to max (100)
-                 else:
-                     new_pbar.setValue(0)
+                new_pbar = self.progress_bars[filename]['bar']
+                if total_bytes == 0:
+                    new_pbar.setValue(new_pbar.maximum()) # Set to max (100)
+                else:
+                    new_pbar.setValue(0)
 
-
-    @Slot(str, QMetaType.LongLong) # Use QMetaType.LongLong
+    @Slot(str, QMetaType.Type.LongLong) # Use QMetaType.Type.LongLong
     def mark_file_as_cached(self, filename, total_bytes):
         """Marks a progress bar as 'Cached' when the file already exists."""
         logging.debug(f"Marking '{filename}' as Cached ({total_bytes} bytes) in UI.")
@@ -675,15 +674,14 @@ class MainWindow(QMainWindow):
                 scaled_max = 10000
                 if total_bytes > 0:
                     if pbar.maximum() != scaled_max:
-                         pbar.setMaximum(scaled_max)
+                        pbar.setMaximum(scaled_max)
                     pbar.setValue(scaled_max)
                 else:
                     if pbar.maximum() != 100:
-                         pbar.setMaximum(100)
+                        pbar.setMaximum(100)
                     pbar.setValue(100)
 
-
-    @Slot(str, QMetaType.LongLong, QMetaType.LongLong) # Use QMetaType.LongLong
+    @Slot(str, QMetaType.Type.LongLong, QMetaType.Type.LongLong) # Use QMetaType.Type.LongLong
     def update_progress_bar(self, filename, current_bytes, total_bytes):
         """Updates the value of a specific progress bar during download."""
         # Values received should be 64-bit integers (LongLong)
