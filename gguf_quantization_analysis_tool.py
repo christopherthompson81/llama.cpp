@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, # Added QProgressBar
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 )
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, list_repo_files # Added list_repo_files
 from huggingface_hub.utils import HfFolder, HfHubHTTPError
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -172,6 +172,7 @@ class DownloadWorker(QThread):
     to avoid blocking the GUI.
     """
     # Signals for detailed progress
+    initial_files_signal = Signal(list) # Emits the full list of files upfront
     progress_signal = Signal(str, int, int) # filename, current_bytes, total_bytes
     new_file_signal = Signal(str, int) # filename, total_bytes (emitted when byte download starts)
     file_checked_signal = Signal(str) # filename (emitted when file is checked/processed in list mode)
@@ -190,7 +191,31 @@ class DownloadWorker(QThread):
         if not self._is_running:
             return
 
-        self.status_update.emit(f"Starting download/check of {self.repo_id}...")
+        self.status_update.emit(f"Listing files in {self.repo_id}...")
+        try:
+            # --- Get the full list of files first ---
+            logging.info(f"Calling list_repo_files for {self.repo_id}")
+            all_files = list_repo_files(repo_id=self.repo_id, token=self.token)
+            logging.info(f"Found {len(all_files)} files in repository.")
+            if self._is_running:
+                self.initial_files_signal.emit(all_files) # Emit the list to populate UI
+            else:
+                return # Stop requested before download
+
+        except HfHubHTTPError as e:
+            logging.error(f"HTTP Error listing files: {e}")
+            if self._is_running:
+                error_msg = f"Error listing files for {self.repo_id}: {e}. Check Repo ID/Token/Network."
+                self.finished_signal.emit(error_msg, True)
+            return # Cannot proceed without file list
+        except Exception as e:
+            logging.exception(f"An unexpected error occurred listing files for {self.repo_id}")
+            if self._is_running:
+                self.finished_signal.emit(f"Error listing files: {e}", True)
+            return # Cannot proceed
+
+        # --- Proceed with snapshot_download ---
+        self.status_update.emit(f"Starting download/check of {len(all_files)} files for {self.repo_id}...")
         # Set signals as class attributes on QtTqdm before download
         QtTqdm.new_file_signal_cls = self.new_file_signal
         QtTqdm.progress_signal_cls = self.progress_signal
@@ -369,9 +394,10 @@ class MainWindow(QMainWindow):
         self.download_thread = DownloadWorker(repo_id, local_dir, token_to_use)
         # Connect signals
         self.download_thread.status_update.connect(self.update_status)
-        self.download_thread.new_file_signal.connect(self.add_or_update_progress_bar) # Renamed slot
-        self.download_thread.file_checked_signal.connect(self.mark_file_as_checked) # Connect check signal
-        self.download_thread.progress_signal.connect(self.update_progress_bar) # Connect progress signal
+        self.download_thread.initial_files_signal.connect(self.populate_initial_progress_bars) # New signal
+        self.download_thread.new_file_signal.connect(self.add_or_update_progress_bar)
+        self.download_thread.file_checked_signal.connect(self.mark_file_as_checked)
+        self.download_thread.progress_signal.connect(self.update_progress_bar)
         self.download_thread.finished_signal.connect(self.download_finished)
         self.download_thread.finished.connect(self.download_thread_cleanup) # Clean up thread object
         self.download_thread.start()
@@ -395,6 +421,49 @@ class MainWindow(QMainWindow):
 
 
     # --- Slots for Progress Updates ---
+    @Slot(list)
+    def populate_initial_progress_bars(self, filenames):
+        """Creates all progress bars based on the initial file list."""
+        logging.debug(f"Populating initial progress bars for {len(filenames)} files.")
+        self.clear_progress_bars() # Clear any previous state
+        for filename in sorted(filenames): # Sort for consistent order
+            if filename not in self.progress_bars:
+                 self._create_progress_bar_widget(filename, 0, "Pending...")
+            else:
+                 # This case should ideally not happen if clear_progress_bars worked
+                 logging.warning(f"populate_initial_progress_bars: Bar for '{filename}' already exists.")
+
+    def _create_progress_bar_widget(self, filename, total_bytes, initial_format):
+        """Helper to create and store label/pbar widgets."""
+        size_str = ""
+        if total_bytes > 0:
+            # Format size for label only if known
+            if total_bytes < 1024:
+                size_str = f"{total_bytes} B"
+            elif total_bytes < 1024**2:
+                size_str = f"{total_bytes / 1024:.2f} KiB"
+            elif total_bytes < 1024**3:
+                size_str = f"{total_bytes / (1024**2):.2f} MiB"
+            else:
+                size_str = f"{total_bytes / (1024**3):.2f} GiB"
+            size_str = f" ({size_str})" # Add parentheses
+
+        label = QLabel(f"{filename}{size_str}")
+        pbar = QProgressBar()
+        pbar.setMinimum(0)
+        # Set max to total_bytes if known, otherwise use 100 for percentage/pending state
+        pbar.setMaximum(total_bytes if total_bytes > 0 else 100)
+        pbar.setValue(0) # Start at 0
+        pbar.setTextVisible(True)
+        pbar.setFormat(initial_format)
+
+        # Store label with pbar for later updates
+        self.progress_bars[filename] = {'bar': pbar, 'label': label}
+        self.progress_area_layout.addWidget(label)
+        self.progress_area_layout.addWidget(pbar)
+        logging.debug(f"_create_progress_bar_widget: Created bar for '{filename}' with format '{initial_format}'")
+
+
     @Slot(str, int)
     def add_or_update_progress_bar(self, filename, total_bytes):
         """
@@ -417,26 +486,34 @@ class MainWindow(QMainWindow):
             size_str = f" ({size_str})" # Add parentheses
 
         if filename not in self.progress_bars:
-            logging.debug(f"add_or_update_progress_bar: Creating new bar for '{filename}'")
-            label = QLabel(f"{filename}{size_str}") # Add size if known
-            pbar = QProgressBar()
-            pbar.setMinimum(0)
-            # Set max to total_bytes if known, otherwise use 100 for percentage
-            pbar.setMaximum(total_bytes if total_bytes > 0 else 100)
-            pbar.setValue(0) # Start at 0
-            pbar.setTextVisible(True)
-            # Set format based on whether download is starting or it's just pending
-            pbar.setFormat("Downloading: %p%" if total_bytes > 0 else "Pending...")
+            # Fallback: Should have been created by populate_initial_progress_bars
+            logging.warning(f"add_or_update_progress_bar: Bar for '{filename}' not found, creating now.")
+            self._create_progress_bar_widget(filename, total_bytes, "Downloading: %p%" if total_bytes > 0 else "Pending...")
+            # No need to update further if just created
+            return
 
-            # Store label with pbar for later updates
-            self.progress_bars[filename] = {'bar': pbar, 'label': label}
-            self.progress_area_layout.addWidget(label)
-            self.progress_area_layout.addWidget(pbar)
+        # Bar exists, update it for download start
+        logging.debug(f"add_or_update_progress_bar: Updating existing bar for '{filename}' to download state.")
+        pbar_info = self.progress_bars[filename]
+        pbar = pbar_info['bar']
+        label = pbar_info['label']
+
+        label.setText(f"{filename}{size_str}") # Update label text with size
+        if total_bytes > 0:
+             # Update max only if it was placeholder (100) or different
+             if pbar.maximum() <= 100 or pbar.maximum() != total_bytes:
+                 pbar.setMaximum(total_bytes)
         else:
-            # Bar exists (likely created by mark_file_as_checked), update it
-            logging.debug(f"add_or_update_progress_bar: Updating existing bar for '{filename}'")
-            pbar_info = self.progress_bars[filename]
-            pbar = pbar_info['bar']
+             # If total_bytes is 0 here, something is odd, keep max=100
+             pbar.setMaximum(100)
+
+        pbar.setValue(0) # Reset value to 0 for download start
+        pbar.setFormat("Downloading: %p%") # Set format for active download
+
+
+    @Slot(str, int, int)
+    @Slot(str)
+    def mark_file_as_checked(self, filename):
             label = pbar_info['label']
 
             label.setText(f"{filename}{size_str}") # Update label text with size
@@ -449,21 +526,20 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def mark_file_as_checked(self, filename):
         """Marks a file's progress bar as 100% (cached/checked)."""
-        if filename not in self.progress_bars:
-            # File was checked but no download started yet, create bar
-            logging.debug(f"mark_file_as_checked: Creating bar for checked file '{filename}'")
-            self.add_or_update_progress_bar(filename, 0) # Create with 0 size initially
-
         if filename in self.progress_bars:
-            logging.debug(f"mark_file_as_checked: Marking '{filename}' as 100% / Cached")
             pbar_info = self.progress_bars[filename]
             pbar = pbar_info['bar']
-            # Set value to max (might be 100 or actual size if updated later)
-            pbar.setValue(pbar.maximum())
-            pbar.setFormat("Cached") # Update format
+            # Only update if it's still pending, don't overwrite Downloading/Complete
+            if pbar.format() == "Pending...":
+                logging.debug(f"mark_file_as_checked: Marking '{filename}' as 100% / Cached")
+                # Set value to max (should be 100 for pending bars)
+                pbar.setValue(pbar.maximum())
+                pbar.setFormat("Cached") # Update format
+            else:
+                logging.debug(f"mark_file_as_checked: Skipping update for '{filename}', state is '{pbar.format()}'")
         else:
-             # Should not happen if add_or_update created it
-             logging.error(f"mark_file_as_checked: Failed to find/create progress bar for '{filename}'")
+             # Should have been created by populate_initial_progress_bars
+             logging.error(f"mark_file_as_checked: Progress bar for '{filename}' not found.")
 
 
     @Slot(str, int, int)
@@ -489,16 +565,21 @@ class MainWindow(QMainWindow):
                  logging.debug(f"update_progress_bar: Download complete for '{filename}'")
 
         else:
-            # This might happen with unfortunate signal timing. Try adding it.
-            logging.warning(f"update_progress_bar: Progress update for unknown file '{filename}'. Attempting to add bar.")
-            self.add_or_update_progress_bar(filename, total_bytes)
+            # This might happen with unfortunate signal timing. Create it if missing.
+            logging.warning(f"update_progress_bar: Progress bar for '{filename}' not found. Attempting to create.")
+            # Create with downloading state directly
+            self._create_progress_bar_widget(filename, total_bytes, "Downloading: %p%")
             # Try updating again immediately after adding
             if filename in self.progress_bars:
-                self.progress_bars[filename]['bar'].setValue(current_bytes)
-                if current_bytes == total_bytes and total_bytes > 0:
-                     self.progress_bars[filename]['bar'].setFormat("Complete")
+                 pbar = self.progress_bars[filename]['bar']
+                 if pbar.maximum() != total_bytes and total_bytes > 0:
+                      pbar.setMaximum(total_bytes)
+                 pbar.setValue(current_bytes)
+                 if current_bytes == total_bytes and total_bytes > 0:
+                      pbar.setFormat("Complete")
             else:
-                logging.error(f"update_progress_bar: Failed to add progress bar for '{filename}' during update.")
+                 # If creation failed, log error
+                 logging.error(f"update_progress_bar: Failed to create progress bar for '{filename}' during update.")
 
     @Slot(str)
     def update_status(self, message):
@@ -513,7 +594,14 @@ class MainWindow(QMainWindow):
         if is_error:
             QMessageBox.critical(self, "Download Error", message)
         else:
-            # Optionally trigger next step, e.g., loading model structure
+            # Mark any remaining pending files as cached (they weren't downloaded)
+            logging.debug("Download finished. Marking remaining pending bars as Cached.")
+            for filename, pbar_info in self.progress_bars.items():
+                if pbar_info['bar'].format() == "Pending...":
+                    logging.debug(f"Marking '{filename}' as Cached post-download.")
+                    pbar_info['bar'].setValue(pbar_info['bar'].maximum())
+                    pbar_info['bar'].setFormat("Cached")
+            # Optionally trigger next step here
             pass
         # Button re-enabled in cleanup
 
