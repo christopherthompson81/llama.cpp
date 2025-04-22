@@ -27,10 +27,6 @@ from PySide6.QtWidgets import (
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# QtTqdm class removed
-
-# --- Worker Thread for Downloads ---
-
 
 class DownloadWorker(QThread):
     """
@@ -166,7 +162,7 @@ class DownloadWorker(QThread):
             if os.path.exists(temp_file_path):
                 resumed_size = os.path.getsize(temp_file_path)
                 logging.info(f"Partial file '{temp_file_path}' found with size {resumed_size}. Attempting resume.")
-                
+
                 # Check if the partial file might already be complete by comparing with API size
                 if api_size is not None and api_size > 0 and resumed_size == api_size:
                     logging.info(f"Partial file '{filename}' appears to be complete ({resumed_size} bytes). Renaming to final filename.")
@@ -175,7 +171,7 @@ class DownloadWorker(QThread):
                     size_mib = int(api_size / (1024 * 1024)) if api_size > 0 else 0
                     self.file_cached_signal.emit(filename, size_mib) # Treat as cached/complete
                     continue # Skip to next file
-                
+
                 # Otherwise, attempt to resume the download
                 request_headers["Range"] = f"bytes={resumed_size}-"
                 file_mode = 'ab' # Append mode
@@ -227,7 +223,7 @@ class DownloadWorker(QThread):
                     content_length_str = response.headers.get('Content-Length')
                     content_range_str = response.headers.get('Content-Range')
                     total_size = -1 # Default to unknown size
-                    
+
                     try:
                         if content_range_str: # Check Content-Range first (present in 206 responses)
                             # Format: "bytes start-end/total"
@@ -286,21 +282,21 @@ class DownloadWorker(QThread):
                                 os.fsync(self._current_file.fileno())
                             except (IOError, OSError) as e:
                                 logging.warning(f"Error during periodic flush: {e}")
-                            
+
                             # Schedule next save if still running
                             if self._is_running:
                                 self._save_timer = threading.Timer(self._save_interval, periodic_save)
                                 self._save_timer.daemon = True
                                 self._save_timer.start()
-                    
+
                     with open(temp_file_path, file_mode) as f:
                         self._current_file = f
-                        
+
                         # Start the periodic save timer
                         self._save_timer = threading.Timer(self._save_interval, periodic_save)
                         self._save_timer.daemon = True
                         self._save_timer.start()
-                        
+
                         for chunk in response.iter_content(chunk_size=chunk_size):
                             if not self._is_running:
                                 logging.info(f"Download stopped by user during transfer of {filename}.")
@@ -324,9 +320,11 @@ class DownloadWorker(QThread):
                                 # --- Throttle progress signal emission ---
                                 current_time = time.time()
                                 time_elapsed = current_time - last_update_time
-                                should_update = (time_elapsed >= update_interval_secs or 
-                                                bytes_since_last_update >= update_interval_bytes or
-                                                (total_size > 0 and current_bytes >= total_size))
+                                should_update = (
+                                    time_elapsed >= update_interval_secs or
+                                    bytes_since_last_update >= update_interval_bytes or
+                                    (total_size > 0 and current_bytes >= total_size)
+                                )
 
                                 if should_update:
                                     # Calculate percentage and MiB for display
@@ -352,7 +350,7 @@ class DownloadWorker(QThread):
                         size_mib = int(final_size / (1024 * 1024))
                         # Emit final progress signal with 100% and final size in MiB
                         self.progress_signal.emit(filename, 100, size_mib)
-                    
+
                     # Check if the final file already exists with the same size
                     if os.path.exists(file_path) and os.path.getsize(file_path) == final_size:
                         logging.info(f"Final file '{filename}' already exists with matching size. Removing temporary file.")
@@ -367,7 +365,7 @@ class DownloadWorker(QThread):
                         self._save_timer.cancel()
                         self._save_timer = None
                     self._current_file = None
-                    
+
                     # Rename temporary file to final name
                     os.rename(temp_file_path, file_path)
                     logging.info(f"Successfully downloaded and saved '{filename}'")
@@ -415,12 +413,12 @@ class DownloadWorker(QThread):
         """Signals the thread to stop downloading."""
         logging.info("Stop requested for download worker.")
         self._is_running = False
-        
+
         # Cancel any active save timer
         if self._save_timer:
             self._save_timer.cancel()
             self._save_timer = None
-            
+
         # The flag will be checked between chunks and between files
 
 
@@ -569,7 +567,7 @@ class MainWindow(QMainWindow):
             child = self.progress_area_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
-                
+
         # Clear the dictionary
         self.progress_bars.clear()
 
@@ -579,16 +577,16 @@ class MainWindow(QMainWindow):
             return " (Unknown size)"
         elif size_bytes <= 0:
             return ""
-            
+
         # Use a list of units and a loop for cleaner code
         units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
         size = float(size_bytes)
         unit_index = 0
-        
+
         while size >= 1024 and unit_index < len(units) - 1:
             size /= 1024
             unit_index += 1
-            
+
         return f" ({size:.2f} {units[unit_index]})"
 
     # --- Slots for Progress Updates ---
@@ -613,7 +611,7 @@ class MainWindow(QMainWindow):
         # Extract just the filename part for display
         display_name = filename.split('/')[-1]
         label = QLabel(f"{display_name}{size_str}")
-        
+
         pbar = QProgressBar()
         pbar.setMinimum(0)
         pbar.setMaximum(100)  # Always use 100 for percentage-based display
@@ -628,11 +626,11 @@ class MainWindow(QMainWindow):
         container_layout.setSpacing(2)
         container_layout.addWidget(label)
         container_layout.addWidget(pbar)
-        
+
         # Store label and pbar for later updates
         self.progress_bars[filename] = {'bar': pbar, 'label': label, 'container': container}
         self.progress_area_layout.addWidget(container)
-        
+
         logging.debug(f"Created progress bar for '{filename}' with format '{initial_format}'")
 
     @Slot(str, int) # Receives filename and size_in_mib
@@ -661,7 +659,7 @@ class MainWindow(QMainWindow):
             # Ensure progress bar is set to use percentage (0-100)
             if pbar.maximum() != 100:
                 pbar.setMaximum(100)
-                
+
             # Update progress bar properties for download start
             if size_mib > 0:
                 pbar.setValue(0) # Reset to start of download
