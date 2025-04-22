@@ -29,20 +29,22 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 # QtTqdm class removed
 
 # --- Worker Thread for Downloads ---
+
+
 class DownloadWorker(QThread):
     """
     Handles the Hugging Face model download in a separate thread
     to avoid blocking the GUI.
     """
-    # Signals for detailed progress - Use QMetaType.LongLong for large file sizes
+    # Signals for detailed progress - Use QMetaType.Type.LongLong for large file sizes
     initial_files_signal = Signal(list) # Emits the full list of files upfront
-    progress_signal = Signal(str, QMetaType.LongLong, QMetaType.LongLong) # filename, current_bytes, total_bytes
-    new_file_signal = Signal(str, QMetaType.LongLong) # filename, total_bytes (emitted when byte download starts)
+    progress_signal = Signal(str, QMetaType.Type.LongLong, QMetaType.Type.LongLong) # filename, current_bytes, total_bytes
+    new_file_signal = Signal(str, QMetaType.Type.LongLong) # filename, total_bytes (emitted when byte download starts)
     # file_checked_signal removed
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
     # Signal to mark a file as cached without downloading
-    file_cached_signal = Signal(str, QMetaType.LongLong) # filename, total_bytes
+    file_cached_signal = Signal(str, QMetaType.Type.LongLong) # filename, total_bytes
 
     def __init__(self, repo_id, local_dir, token):
         super().__init__()
@@ -81,7 +83,6 @@ class DownloadWorker(QThread):
         except Exception as e:
             logging.exception(f"Unexpected error fetching repo files: {e}")
             raise RuntimeError(f"An unexpected error occurred while fetching file list: {e}") from e
-
 
     def run(self):
         """Executes the download using requests."""
@@ -126,10 +127,10 @@ class DownloadWorker(QThread):
             try:
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
             except OSError as e:
-                 logging.error(f"Failed to create directory for {filename}: {e}")
-                 self.status_update.emit(f"Error: Could not create directory for {filename}. Skipping.")
-                 error_count += 1
-                 continue # Skip this file
+                logging.error(f"Failed to create directory for {filename}: {e}")
+                self.status_update.emit(f"Error: Could not create directory for {filename}. Skipping.")
+                error_count += 1
+                continue # Skip this file
 
             # --- Check if file exists and size matches (basic caching) ---
             if os.path.exists(file_path):
@@ -163,25 +164,25 @@ class DownloadWorker(QThread):
 
                     # Handle potential resume responses
                     if response.status_code == 416: # Range Not Satisfiable
-                         logging.warning(f"Server returned 416 Range Not Satisfiable for {filename}. "
-                                         f"This might mean the partial file size ({resumed_size}) matches the total size. "
-                                         f"Checking local vs API size.")
-                         # Check if the existing partial file is actually complete
-                         if api_size is not None and api_size > 0 and resumed_size == api_size:
-                             logging.info(f"Partial file '{filename}' is complete ({resumed_size} bytes). Renaming.")
-                             os.rename(temp_file_path, file_path)
-                             self.file_cached_signal.emit(filename, api_size) # Treat as cached/complete (remove cast)
-                             continue # Skip to next file
-                         else:
-                             logging.warning(f"Partial file size {resumed_size} doesn't match API size {api_size}. "
-                                             f"Restarting download from beginning.")
-                             resumed_size = 0 # Reset resume state
-                             file_mode = 'wb' # Overwrite mode
-                             # Re-request without Range header
-                             with requests.get(download_url, headers=headers, stream=True, timeout=30) as fresh_response:
-                                 fresh_response.raise_for_status()
-                                 response = fresh_response # Use the new response object
-                                 # Proceed with download logic below...
+                        logging.warning(f"Server returned 416 Range Not Satisfiable for {filename}. "
+                                        f"This might mean the partial file size ({resumed_size}) matches the total size. "
+                                        f"Checking local vs API size.")
+                        # Check if the existing partial file is actually complete
+                        if api_size is not None and api_size > 0 and resumed_size == api_size:
+                            logging.info(f"Partial file '{filename}' is complete ({resumed_size} bytes). Renaming.")
+                            os.rename(temp_file_path, file_path)
+                            self.file_cached_signal.emit(filename, api_size) # Treat as cached/complete (remove cast)
+                            continue # Skip to next file
+                        else:
+                            logging.warning(f"Partial file size {resumed_size} doesn't match API size {api_size}. "
+                                            f"Restarting download from beginning.")
+                            resumed_size = 0 # Reset resume state
+                            file_mode = 'wb' # Overwrite mode
+                            # Re-request without Range header
+                            with requests.get(download_url, headers=headers, stream=True, timeout=30) as fresh_response:
+                                fresh_response.raise_for_status()
+                                response = fresh_response # Use the new response object
+                                # Proceed with download logic below...
                     elif response.status_code == 206: # Partial Content (successful resume)
                         logging.info(f"Server accepted resume request for '{filename}' (Status 206).")
                     elif response.status_code == 200: # OK (full download, or server ignored Range)
@@ -191,7 +192,7 @@ class DownloadWorker(QThread):
                             resumed_size = 0 # Reset resume state
                             file_mode = 'wb' # Overwrite mode
                         else:
-                             logging.info(f"Starting full download for '{filename}' (Status 200).")
+                            logging.info(f"Starting full download for '{filename}' (Status 200).")
                     else:
                         # Raise any other non-successful status codes
                         response.raise_for_status()
@@ -215,8 +216,8 @@ class DownloadWorker(QThread):
 
                         # If size still unknown, try API size as last resort
                         if total_size <= 0 and api_size is not None and api_size > 0:
-                             total_size = api_size
-                             logging.warning(f"Using API size ({api_size}) for {filename} as Content-Length/Range was missing or invalid.")
+                            total_size = api_size
+                            logging.warning(f"Using API size ({api_size}) for {filename} as Content-Length/Range was missing or invalid.")
 
                     except (ValueError, IndexError) as e:
                         logging.warning(f"Error parsing size headers (Content-Length: '{content_length_str}', Content-Range: '{content_range_str}') for {filename}: {e}")
@@ -228,14 +229,14 @@ class DownloadWorker(QThread):
                             total_size = -1 # Still unknown
 
                     if total_size == 0: # Handle zero-byte files (check after determining size)
-                         logging.info(f"File '{filename}' is zero bytes. Creating empty file.")
-                         # Emit signals to show completion immediately (remove casts)
-                         self.new_file_signal.emit(filename, 0)
-                         if not self._is_running: return
-                         pathlib.Path(file_path).touch() # Create empty file directly
-                         self.progress_signal.emit(filename, 0, 0)
-                         download_count += 1
-                         continue # Skip to next file
+                        logging.info(f"File '{filename}' is zero bytes. Creating empty file.")
+                        # Emit signals to show completion immediately (remove casts)
+                        self.new_file_signal.emit(filename, 0)
+                        if not self._is_running: return
+                        pathlib.Path(file_path).touch() # Create empty file directly
+                        self.progress_signal.emit(filename, 0, 0)
+                        download_count += 1
+                        continue # Skip to next file
 
                     # Emit signal that download is starting (pass total size, remove cast)
                     self.new_file_signal.emit(filename, total_size if total_size > 0 else 0)
@@ -275,11 +276,11 @@ class DownloadWorker(QThread):
                                 if time_elapsed >= update_interval_secs:
                                     should_update = True
                                 elif bytes_since_last_update >= update_interval_bytes:
-                                     should_update = True
+                                    should_update = True
 
                                 # Also update if download is complete (current_bytes matches total_size)
                                 if total_size > 0 and current_bytes >= total_size:
-                                     should_update = True # Ensure final update is sent
+                                    should_update = True # Ensure final update is sent
 
                                 if should_update:
                                     # Emit progress (handle unknown total size for display, remove casts)
@@ -292,14 +293,14 @@ class DownloadWorker(QThread):
                     # Check final size against determined total_size (if known)
                     final_size = os.path.getsize(temp_file_path)
                     if total_size > 0 and final_size != total_size:
-                         # Size mismatch after download completion
-                         raise IOError(f"Final file size ({final_size}) does not match expected size ({total_size}) for {filename}")
+                        # Size mismatch after download completion
+                        raise IOError(f"Final file size ({final_size}) does not match expected size ({total_size}) for {filename}")
                     elif total_size <= 0:
-                         # If total size was unknown, update it now based on final size for consistency
-                         logging.info(f"Total size for '{filename}' was unknown, setting to final size: {final_size}")
-                         total_size = final_size
-                         # Optionally emit one last progress signal with the now known total size (remove casts)
-                         self.progress_signal.emit(filename, final_size, final_size)
+                        # If total size was unknown, update it now based on final size for consistency
+                        logging.info(f"Total size for '{filename}' was unknown, setting to final size: {final_size}")
+                        total_size = final_size
+                        # Optionally emit one last progress signal with the now known total size (remove casts)
+                        self.progress_signal.emit(filename, final_size, final_size)
 
                     # Rename temporary file to final name
                     os.rename(temp_file_path, file_path)
@@ -322,15 +323,15 @@ class DownloadWorker(QThread):
                     except OSError:
                         pass
             except IOError as e:
-                 logging.error(f"File I/O error for {filename}: {e}")
-                 self.status_update.emit(f"File error for {filename}: {e}. Skipping.")
-                 error_count += 1
-                 # Clean up partial file
-                 if os.path.exists(temp_file_path):
-                     try:
-                         os.remove(temp_file_path)
-                     except OSError:
-                         pass
+                logging.error(f"File I/O error for {filename}: {e}")
+                self.status_update.emit(f"File error for {filename}: {e}. Skipping.")
+                error_count += 1
+                # Clean up partial file
+                if os.path.exists(temp_file_path):
+                    try:
+                        os.remove(temp_file_path)
+                    except OSError:
+                        pass
             except Exception as e:
                 logging.exception(f"An unexpected error occurred during download of {filename}")
                 self.status_update.emit(f"Unexpected error for {filename}: {e}. Skipping.")
@@ -542,10 +543,10 @@ class MainWindow(QMainWindow):
         for filename in sorted(filenames): # Sort for consistent order
             logging.debug(f"Populating: Adding key '{filename}' to self.progress_bars")
             if filename not in self.progress_bars:
-                 self._create_progress_bar_widget(filename, 0, "Pending...")
+                self._create_progress_bar_widget(filename, 0, "Pending...")
             else:
-                 # This case should ideally not happen if clear_progress_bars worked
-                 logging.warning(f"populate_initial_progress_bars: Bar for '{filename}' already exists.")
+                # This case should ideally not happen if clear_progress_bars worked
+                logging.warning(f"populate_initial_progress_bars: Bar for '{filename}' already exists.")
 
     def _create_progress_bar_widget(self, filename, total_bytes, initial_format):
         """Helper to create and store label/pbar widgets."""
@@ -577,8 +578,7 @@ class MainWindow(QMainWindow):
         self.progress_area_layout.addWidget(pbar)
         logging.debug(f"_create_progress_bar_widget: Created bar for '{filename}' with format '{initial_format}'")
 
-
-    @Slot(str, QMetaType.LongLong) # Use QMetaType.LongLong
+    @Slot(str, QMetaType.Type.LongLong) # Use QMetaType.Type.LongLong
     def add_or_update_progress_bar(self, filename, total_bytes):
         """
         Updates a progress bar when a file download starts (or resumes).
@@ -626,9 +626,9 @@ class MainWindow(QMainWindow):
             self._create_progress_bar_widget(filename, total_bytes, "Downloading: %p%" if total_bytes > 0 else "Pending...")
             # Ensure the newly created bar reflects the current state (value 0)
             if filename in self.progress_bars:
-                 self.progress_bars[filename]['bar'].setValue(0)
+                self.progress_bars[filename]['bar'].setValue(0)
 
-    @Slot(str, QMetaType.LongLong) # Use QMetaType.LongLong
+    @Slot(str, QMetaType.Type.LongLong) # Use QMetaType.Type.LongLong
     def mark_file_as_cached(self, filename, total_bytes):
         """Marks a progress bar as 'Cached' when the file already exists."""
         logging.debug(f"Marking '{filename}' as Cached ({total_bytes} bytes) in UI.")
@@ -655,16 +655,15 @@ class MainWindow(QMainWindow):
             # Optionally create it here if needed, marked as cached
             self._create_progress_bar_widget(filename, total_bytes, "Cached")
             if filename in self.progress_bars:
-                 pbar = self.progress_bars[filename]['bar']
-                 if total_bytes > 0:
-                     pbar.setMaximum(total_bytes)
-                     pbar.setValue(total_bytes)
-                 else:
-                     pbar.setMaximum(100)
-                     pbar.setValue(100)
+                pbar = self.progress_bars[filename]['bar']
+                if total_bytes > 0:
+                    pbar.setMaximum(total_bytes)
+                    pbar.setValue(total_bytes)
+                else:
+                    pbar.setMaximum(100)
+                    pbar.setValue(100)
 
-
-    @Slot(str, QMetaType.LongLong, QMetaType.LongLong) # Use QMetaType.LongLong
+    @Slot(str, QMetaType.Type.LongLong, QMetaType.Type.LongLong) # Use QMetaType.Type.LongLong
     def update_progress_bar(self, filename, current_bytes, total_bytes):
         """Updates the value of a specific progress bar during download."""
         # Values received are already LongLong (qint64) due to slot signature
@@ -706,10 +705,10 @@ class MainWindow(QMainWindow):
                 current_format = pbar.format()
                 # Only change format if it's not already showing percentage or complete
                 if not current_format.startswith("Downloading: ") and current_format != "Complete":
-                     # Check if it's the MiB format or Pending/Cached/Skipped etc.
-                     if "%p%" not in current_format:
-                         logging.debug(f"update_progress_bar: Changing format for '{filename}' from '{current_format}' to Downloading %.")
-                         pbar.setFormat("Downloading: %p%")
+                    # Check if it's the MiB format or Pending/Cached/Skipped etc.
+                    if "%p%" not in current_format:
+                        logging.debug(f"update_progress_bar: Changing format for '{filename}' from '{current_format}' to Downloading %.")
+                        pbar.setFormat("Downloading: %p%")
 
                 # Update progress value using the qint64 value
                 # Clamping might still be wise due to potential timing issues
@@ -735,12 +734,11 @@ class MainWindow(QMainWindow):
             self._create_progress_bar_widget(filename, total_bytes_int, initial_format)
             # Try updating again immediately after adding
             if filename in self.progress_bars:
-                 # Re-call update_progress_bar to set the correct value/format
-                 self.update_progress_bar(filename, current_bytes, total_bytes)
+                # Re-call update_progress_bar to set the correct value/format
+                self.update_progress_bar(filename, current_bytes, total_bytes)
             else:
                 # If creation failed, log error
                 logging.error(f"update_progress_bar: Failed to create progress bar for '{filename}' during update.")
-
 
     @Slot(str)
     def update_status(self, message):
@@ -755,7 +753,7 @@ class MainWindow(QMainWindow):
         if is_error:
             QMessageBox.warning(self, "Download Finished with Errors", message) # Use warning for partial success
         else:
-             QMessageBox.information(self, "Download Complete", message) # Use info for success
+            QMessageBox.information(self, "Download Complete", message) # Use info for success
 
         # After download attempt, mark any remaining "Pending" bars as "Skipped" or "Unknown"
         # (They weren't downloaded, cached, or errored specifically)
