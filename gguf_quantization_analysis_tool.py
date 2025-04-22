@@ -580,7 +580,7 @@ class MainWindow(QMainWindow):
         self.progress_area_layout.addWidget(pbar)
         logging.debug(f"_create_progress_bar_widget: Created bar for '{filename}' with format '{initial_format}'")
 
-    @Slot(str, QMetaType.Type.LongLong) # Use QMetaType.Type.LongLong
+    @Slot(str, int) # Use int
     def add_or_update_progress_bar(self, filename, total_bytes):
         """
         Updates a progress bar when a file download starts (or resumes).
@@ -728,21 +728,20 @@ class MainWindow(QMainWindow):
                         logging.debug(f"update_progress_bar: Changing format for '{filename}' from '{current_format}' to Downloading %.")
                         pbar.setFormat("Downloading: %p%")
 
-                # Update progress value using the qint64 value
-                # Clamping might still be wise due to potential timing issues
-                # Use qint64 directly for min and setValue
-                clamped_value = min(current_bytes, total_bytes)
-                pbar.setValue(clamped_value)
+                # Calculate and update scaled progress value
+                # Clamp current_bytes to total_bytes before scaling
+                clamped_current = min(current_bytes, total_bytes)
+                # Calculate scaled value, ensuring total_bytes is not zero
+                scaled_value = int((clamped_current / total_bytes) * scaled_max) if total_bytes > 0 else 0
+                pbar.setValue(scaled_value)
 
-                # Mark as complete if finished
-                # Use >= to handle potential overshoots or final update timing
-                # Use qint64 directly for comparison and setValue
-                if clamped_value >= total_bytes:
+                # Mark as complete if finished (using original byte values for check)
+                if current_bytes >= total_bytes:
                     # Check if format is already Complete to avoid redundant logging/updates
                     if pbar.format() != "Complete":
                         pbar.setFormat("Complete")
                         # Ensure value is exactly maximum on completion
-                        pbar.setValue(total_bytes) # Use qint64 total_bytes
+                        pbar.setValue(scaled_max) # Set to scaled max
                         logging.debug(f"update_progress_bar: Download marked complete for '{filename}'")
         else:
             # Handle missing progress bar case (should be less likely now)
