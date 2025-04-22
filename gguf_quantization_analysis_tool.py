@@ -350,8 +350,8 @@ class MainWindow(QMainWindow):
         self.download_thread.status_update.connect(self.update_status)
         self.download_thread.initial_files_signal.connect(self.populate_initial_progress_bars) # New signal
         self.download_thread.new_file_signal.connect(self.add_or_update_progress_bar)
-        self.download_thread.file_checked_signal.connect(self.mark_file_as_checked)
-        self.download_thread.progress_signal.connect(self.update_progress_bar)
+        # self.download_thread.file_checked_signal connection removed
+        self.download_thread.progress_signal.connect(self.update_progress_bar) # Connect progress signal
         self.download_thread.finished_signal.connect(self.download_finished)
         self.download_thread.finished.connect(self.download_thread_cleanup) # Clean up thread object
         self.download_thread.start()
