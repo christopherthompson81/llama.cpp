@@ -13,12 +13,15 @@ import os
 import pathlib
 import sys
 
-# Import tqdm for type hinting and base class if needed, but the core logic is custom
+# Import tqdm for type hinting and base class if needed
 try:
+    # Use standard tqdm for type hints if needed, but inherit from asyncio
     from tqdm.auto import tqdm as tqdm_auto
+    from tqdm.asyncio import tqdm as tqdm_asyncio
 except ImportError:
-    logging.warning("tqdm not found. Progress bars will not be as detailed.")
-    tqdm_auto = None # Fallback or raise error? For now, fallback.
+    logging.warning("tqdm library not found. Progress bars will not be available.")
+    tqdm_auto = None
+    tqdm_asyncio = None # Ensure this is None if import fails
 
 from PySide6.QtCore import QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import (
