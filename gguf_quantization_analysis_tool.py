@@ -42,6 +42,7 @@ class QtTqdm:
     # Class attributes to hold signals temporarily during download
     new_file_signal_cls = None
     progress_signal_cls = None
+    _lock = None # Dummy class attribute to satisfy huggingface_hub internal checks
 
     def __init__(self, iterable=None, *args, **kwargs): # Accept iterable as first arg
         # Use class attributes for signals
