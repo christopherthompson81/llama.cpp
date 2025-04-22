@@ -36,15 +36,15 @@ class DownloadWorker(QThread):
     Handles the Hugging Face model download in a separate thread
     to avoid blocking the GUI.
     """
-    # Signals for detailed progress - Use int for large file sizes
+    # Signals for detailed progress - Use int for display values
     initial_files_signal = Signal(list) # Emits the full list of files upfront
-    progress_signal = Signal(str, int, int) # filename, current_bytes, total_bytes
-    new_file_signal = Signal(str, int) # filename, total_bytes (emitted when byte download starts)
+    progress_signal = Signal(str, int, int) # filename, percentage (0-100), size_in_mib
+    new_file_signal = Signal(str, int) # filename, size_in_mib
     # file_checked_signal removed
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
     # Signal to mark a file as cached without downloading
-    file_cached_signal = Signal(str, int) # filename, total_bytes
+    file_cached_signal = Signal(str, int) # filename, size_in_mib
 
     def __init__(self, repo_id, local_dir, token):
         super().__init__()
