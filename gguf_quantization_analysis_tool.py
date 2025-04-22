@@ -36,15 +36,15 @@ class DownloadWorker(QThread):
     Handles the Hugging Face model download in a separate thread
     to avoid blocking the GUI.
     """
-    # Signals for detailed progress - Use QMetaType.Type.LongLong for large file sizes
+    # Signals for detailed progress - Use standard Python int
     initial_files_signal = Signal(list) # Emits the full list of files upfront
-    progress_signal = Signal(str, QMetaType.Type.LongLong, QMetaType.Type.LongLong) # filename, current_bytes, total_bytes
-    new_file_signal = Signal(str, QMetaType.Type.LongLong) # filename, total_bytes (emitted when byte download starts)
+    progress_signal = Signal(str, int, int) # filename, current_bytes, total_bytes
+    new_file_signal = Signal(str, int) # filename, total_bytes (emitted when byte download starts)
     # file_checked_signal removed
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
     # Signal to mark a file as cached without downloading
-    file_cached_signal = Signal(str, QMetaType.Type.LongLong) # filename, total_bytes
+    file_cached_signal = Signal(str, int) # filename, total_bytes
 
     def __init__(self, repo_id, local_dir, token):
         super().__init__()
@@ -566,8 +566,10 @@ class MainWindow(QMainWindow):
         label = QLabel(f"{filename}{size_str}")
         pbar = QProgressBar()
         pbar.setMinimum(0)
-        # Set max to total_bytes if known and > 0, otherwise use 100 for indeterminate/pending state
-        pbar.setMaximum(total_bytes if total_bytes > 0 else 100)
+        # Use a scaled maximum (e.g., 10000) for known sizes to avoid overflow
+        # Use 100 for unknown sizes (pending/indeterminate state)
+        scaled_max = 10000
+        pbar.setMaximum(scaled_max if total_bytes > 0 else 100)
         pbar.setValue(0) # Start at 0
         pbar.setTextVisible(True)
         pbar.setFormat(initial_format)
@@ -602,20 +604,23 @@ class MainWindow(QMainWindow):
             label.setText(f"{display_name}{size_str}")
 
             # Update progress bar properties for download start
+            scaled_max = 10000
             if total_bytes > 0:
-                # Ensure max is set correctly
-                if pbar.maximum() != total_bytes:
-                    pbar.setMaximum(total_bytes)
+                # Ensure max is set to the scaled maximum
+                if pbar.maximum() != scaled_max:
+                    pbar.setMaximum(scaled_max)
                 pbar.setValue(0) # Reset to start of download
                 pbar.setFormat("Downloading: %p%") # Set downloading state
-            else:
-                # Handle zero-byte files or errors? Keep pending or mark complete?
-                # For now, keep pending if max was 100, otherwise mark complete?
-                if pbar.maximum() == 100: # Was pending
-                    pbar.setFormat("Pending...") # Or maybe "Zero Size"?
-                else: # Had a previous size? Unlikely here.
-                    pbar.setFormat("Complete") # Assume complete if size is 0 now
+            else: # Handle unknown size or zero-byte files
+                # Use 100 for max, display appropriate format
+                if pbar.maximum() != 100:
+                    pbar.setMaximum(100)
                 pbar.setValue(0)
+                if total_bytes == 0: # Specifically zero-byte
+                    pbar.setFormat("Complete (0 B)")
+                    pbar.setValue(100) # Mark as complete visually
+                else: # Unknown size (-1 or other)
+                    pbar.setFormat("Pending...") # Or "Downloading..." if preferred
 
             logging.debug(f"add_or_update_progress_bar: Updated bar for '{filename}' to download state.")
 
@@ -623,12 +628,18 @@ class MainWindow(QMainWindow):
             # Fallback: Create new progress bar if it wasn't created initially
             # This might happen if list_repo_files failed or had timing issues
             logging.warning(f"add_or_update_progress_bar: Progress bar for '{filename}' not found. Creating now.")
-            self._create_progress_bar_widget(filename, total_bytes, "Downloading: %p%" if total_bytes > 0 else "Pending...")
-            # Ensure the newly created bar reflects the current state (value 0)
+            initial_format = "Downloading: %p%" if total_bytes > 0 else ("Complete (0 B)" if total_bytes == 0 else "Pending...")
+            self._create_progress_bar_widget(filename, total_bytes, initial_format)
+            # Ensure the newly created bar reflects the current state (value 0 or 100 for 0 B)
             if filename in self.progress_bars:
-                self.progress_bars[filename]['bar'].setValue(0)
+                 new_pbar = self.progress_bars[filename]['bar']
+                 if total_bytes == 0:
+                     new_pbar.setValue(new_pbar.maximum()) # Set to max (100)
+                 else:
+                     new_pbar.setValue(0)
 
-    @Slot(str, QMetaType.Type.LongLong) # Use QMetaType.Type.LongLong
+
+    @Slot(str, int) # Use int
     def mark_file_as_cached(self, filename, total_bytes):
         """Marks a progress bar as 'Cached' when the file already exists."""
         logging.debug(f"Marking '{filename}' as Cached ({total_bytes} bytes) in UI.")
@@ -642,12 +653,16 @@ class MainWindow(QMainWindow):
             size_str = self._format_size_string(total_bytes)
             label.setText(f"{display_name}{size_str}")
 
-            # Update progress bar state
+            # Update progress bar state using scaled max
+            scaled_max = 10000
             if total_bytes > 0:
-                pbar.setMaximum(total_bytes)
-                pbar.setValue(total_bytes) # Set to 100%
-            else: # Handle unknown or zero size
-                pbar.setMaximum(100) # Use 100 base for visual completion
+                # Set to scaled max and full value
+                if pbar.maximum() != scaled_max:
+                    pbar.setMaximum(scaled_max)
+                pbar.setValue(scaled_max) # Set to 100% of scaled value
+            else: # Handle unknown or zero size (should ideally have size if cached, but handle defensively)
+                if pbar.maximum() != 100:
+                    pbar.setMaximum(100) # Use 100 base for visual completion
                 pbar.setValue(100)
             pbar.setFormat("Cached")
         else:
@@ -656,17 +671,22 @@ class MainWindow(QMainWindow):
             self._create_progress_bar_widget(filename, total_bytes, "Cached")
             if filename in self.progress_bars:
                 pbar = self.progress_bars[filename]['bar']
+                pbar = self.progress_bars[filename]['bar']
+                scaled_max = 10000
                 if total_bytes > 0:
-                    pbar.setMaximum(total_bytes)
-                    pbar.setValue(total_bytes)
+                    if pbar.maximum() != scaled_max:
+                         pbar.setMaximum(scaled_max)
+                    pbar.setValue(scaled_max)
                 else:
-                    pbar.setMaximum(100)
+                    if pbar.maximum() != 100:
+                         pbar.setMaximum(100)
                     pbar.setValue(100)
 
-    @Slot(str, QMetaType.Type.LongLong, QMetaType.Type.LongLong) # Use QMetaType.Type.LongLong
+
+    @Slot(str, int, int) # Use int
     def update_progress_bar(self, filename, current_bytes, total_bytes):
         """Updates the value of a specific progress bar during download."""
-        # Values received are already LongLong (qint64) due to slot signature
+        # Values received are standard Python int
         # Cast to Python ints for safety in calculations/comparisons if needed,
         # but qint64 should be handled correctly by QProgressBar.
         # Keep using the qint64 arguments directly for Qt calls.
@@ -677,29 +697,27 @@ class MainWindow(QMainWindow):
         if filename in self.progress_bars:
             pbar_info = self.progress_bars[filename]
             pbar = pbar_info['bar']
+            scaled_max = 10000
 
             # Handle unknown total size (total_bytes_int <= 0)
             if total_bytes_int <= 0:
                 # If total size is unknown, display bytes downloaded without percentage.
-                # Option 1: Indeterminate (pulsing bar) - might be confusing with resume
+                # Option 1: Indeterminate (pulsing bar) - might be confusing
                 # pbar.setRange(0, 0) # Makes it indeterminate
                 # Option 2: Show bytes downloaded
-                pbar.setMaximum(100) # Keep a fixed range for value setting
+                if pbar.maximum() != 100: # Ensure max is 100 for this mode
+                    pbar.setMaximum(100)
                 pbar.setValue(0)     # Value doesn't represent percentage here
-                # Use the qint64 current_bytes for calculation
-                size_mib = int(current_bytes) / (1024 * 1024) # Cast for division
+                size_mib = current_bytes / (1024 * 1024) # Use standard int
                 pbar.setFormat(f"Downloading: {size_mib:.2f} MiB")
             else:
-                # Known total size (total_bytes_int > 0)
-                # Ensure max is correct (might have been 100 initially or changed)
-                # Compare using int, but set using the qint64 total_bytes
-                if pbar.maximum() != int(total_bytes): # Compare with int representation
-                    logging.debug(f"update_progress_bar: Setting max size for '{filename}' to {total_bytes}")
-                    # Set maximum using the qint64 value passed to the slot
-                    pbar.setMaximum(total_bytes) # Use the original qint64 value
+                # Known total size (total_bytes_int > 0) - Use scaling
+                # Ensure max is the scaled maximum
+                if pbar.maximum() != scaled_max:
+                    logging.debug(f"update_progress_bar: Setting max size for '{filename}' to scaled {scaled_max}")
+                    pbar.setMaximum(scaled_max)
                     # Ensure range is not indeterminate if size becomes known
-                    # pbar.setRange(0, 0) # Make sure it's not indeterminate
-                    # pbar.setRange(0, total_bytes) # Alternative to setMaximum
+                    # pbar.setRange(0, scaled_max) # Alternative
 
                 # Ensure format shows downloading percentage state if it wasn't already
                 current_format = pbar.format()
@@ -729,9 +747,9 @@ class MainWindow(QMainWindow):
         else:
             # Handle missing progress bar case (should be less likely now)
             logging.warning(f"update_progress_bar: Progress bar for '{filename}' not found during update. Attempting to create.")
-            # Create with appropriate state based on total_bytes_int
-            initial_format = "Downloading: %p%" if total_bytes_int > 0 else "Downloading..."
-            self._create_progress_bar_widget(filename, total_bytes_int, initial_format)
+            # Create with appropriate state based on total_bytes
+            initial_format = "Downloading: %p%" if total_bytes > 0 else ("Complete (0 B)" if total_bytes == 0 else "Downloading...")
+            self._create_progress_bar_widget(filename, total_bytes, initial_format)
             # Try updating again immediately after adding
             if filename in self.progress_bars:
                 # Re-call update_progress_bar to set the correct value/format
