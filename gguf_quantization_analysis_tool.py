@@ -602,7 +602,7 @@ class MainWindow(QMainWindow):
         Updates a progress bar when a file download starts (or resumes).
         Called when the new_file_signal is received.
         """
-        logging.info(f"Starting download for: {filename} ({total_bytes} bytes)")
+        logging.info(f"Starting download for: {filename} ({size_mib} MiB)")
 
         # Extract just the filename part if it contains a path (should match QtTqdm logic)
         display_name = filename.split('/')[-1]
@@ -643,12 +643,12 @@ class MainWindow(QMainWindow):
             # Fallback: Create new progress bar if it wasn't created initially
             # This might happen if list_repo_files failed or had timing issues
             logging.warning(f"add_or_update_progress_bar: Progress bar for '{filename}' not found. Creating now.")
-            initial_format = "Downloading: %p%" if total_bytes > 0 else ("Complete (0 B)" if total_bytes == 0 else "Pending...")
-            self._create_progress_bar_widget(filename, total_bytes, initial_format)
+            initial_format = "Downloading: %p%" if size_mib > 0 else ("Complete (0 B)" if size_mib == 0 else "Pending...")
+            self._create_progress_bar_widget(filename, size_mib, initial_format)
             # Ensure the newly created bar reflects the current state (value 0 or 100 for 0 B)
             if filename in self.progress_bars:
                 new_pbar = self.progress_bars[filename]['bar']
-                if total_bytes == 0:
+                if size_mib == 0:
                     new_pbar.setValue(new_pbar.maximum()) # Set to max (100)
                 else:
                     new_pbar.setValue(0)
@@ -656,7 +656,7 @@ class MainWindow(QMainWindow):
     @Slot(str, int) # Receives filename and size_in_mib
     def mark_file_as_cached(self, filename, size_mib):
         """Marks a progress bar as 'Cached' when the file already exists."""
-        logging.debug(f"Marking '{filename}' as Cached ({total_bytes} bytes) in UI.")
+        logging.debug(f"Marking '{filename}' as Cached ({size_mib} MiB) in UI.")
         if filename in self.progress_bars:
             pbar_info = self.progress_bars[filename]
             pbar = pbar_info['bar']
@@ -675,12 +675,12 @@ class MainWindow(QMainWindow):
         else:
             logging.warning(f"mark_file_as_cached: Progress bar for '{filename}' not found.")
             # Optionally create it here if needed, marked as cached
-            self._create_progress_bar_widget(filename, total_bytes, "Cached")
+            self._create_progress_bar_widget(filename, size_mib, "Cached")
             if filename in self.progress_bars:
                 pbar = self.progress_bars[filename]['bar']
                 pbar = self.progress_bars[filename]['bar']
                 scaled_max = 10000
-                if total_bytes > 0:
+                if size_mib > 0:
                     if pbar.maximum() != scaled_max:
                         pbar.setMaximum(scaled_max)
                     pbar.setValue(scaled_max)
