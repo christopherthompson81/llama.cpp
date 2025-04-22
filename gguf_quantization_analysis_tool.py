@@ -15,6 +15,7 @@ import sys
 import json
 import requests # Added for HTTP requests
 import time # Added for throttling progress updates
+import threading # Added for periodic save timer
 
 from PySide6.QtCore import QThread, Signal, Slot, Qt # Import QMetaType
 from PySide6.QtWidgets import (
@@ -52,6 +53,9 @@ class DownloadWorker(QThread):
         self.local_dir = local_dir
         self.token = token # HF token for authorization
         self._is_running = True # Flag to signal stop
+        self._current_file = None # Reference to current file being downloaded
+        self._save_timer = None # Timer for periodic saves
+        self._save_interval = 10 # Save every 10 seconds
 
     def _get_repo_files(self):
         """Fetches file list and sizes from Hugging Face Hub API."""
@@ -257,10 +261,34 @@ class DownloadWorker(QThread):
                     update_interval_secs = 0.2 # Update at most every 0.2 seconds
                     update_interval_bytes = 1024 * 1024 # Or every 1MB
 
+                    # Start periodic save timer
+                    def periodic_save():
+                        if self._current_file and not self._current_file.closed:
+                            logging.debug(f"Performing periodic flush for {filename}")
+                            self._current_file.flush()
+                            os.fsync(self._current_file.fileno())
+                            
+                            # Schedule next save if still running
+                            if self._is_running:
+                                self._save_timer = threading.Timer(self._save_interval, periodic_save)
+                                self._save_timer.daemon = True
+                                self._save_timer.start()
+                    
                     with open(temp_file_path, file_mode) as f:
+                        self._current_file = f
+                        
+                        # Start the periodic save timer
+                        self._save_timer = threading.Timer(self._save_interval, periodic_save)
+                        self._save_timer.daemon = True
+                        self._save_timer.start()
+                        
                         for chunk in response.iter_content(chunk_size=chunk_size):
                             if not self._is_running:
                                 logging.info(f"Download stopped by user during transfer of {filename}.")
+                                # Cancel the timer
+                                if self._save_timer:
+                                    self._save_timer.cancel()
+                                    self._save_timer = None
                                 # Clean up temporary file
                                 try:
                                     os.remove(temp_file_path)
@@ -318,6 +346,12 @@ class DownloadWorker(QThread):
                         # Emit final progress signal with 100% and final size in MiB
                         self.progress_signal.emit(filename, 100, size_mib)
 
+                    # Cancel the timer when download is complete
+                    if self._save_timer:
+                        self._save_timer.cancel()
+                        self._save_timer = None
+                    self._current_file = None
+                    
                     # Rename temporary file to final name
                     os.rename(temp_file_path, file_path)
                     logging.info(f"Successfully downloaded and saved '{filename}'")
@@ -374,6 +408,12 @@ class DownloadWorker(QThread):
         """Signals the thread to stop downloading."""
         logging.info("Stop requested for download worker.")
         self._is_running = False
+        
+        # Cancel any active save timer
+        if self._save_timer:
+            self._save_timer.cancel()
+            self._save_timer = None
+            
         # The flag will be checked between chunks and between files
 
 
