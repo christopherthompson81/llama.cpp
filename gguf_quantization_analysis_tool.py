@@ -137,7 +137,7 @@ class DownloadWorker(QThread):
                 # Use API size for check if available and > 0, otherwise skip size check
                 if api_size is not None and api_size > 0 and local_size == api_size:
                     logging.info(f"File '{filename}' already exists and size matches ({api_size} bytes). Skipping download.")
-                    self.file_cached_signal.emit(filename, qint64(api_size)) # Signal UI to mark as cached (cast to qint64)
+                    self.file_cached_signal.emit(filename, api_size) # Signal UI to mark as cached (remove cast)
                     continue # Skip to next file
                 else:
                     logging.info(f"File '{filename}' exists but size mismatch (local: {local_size}, api: {api_size}) or API size unknown. Re-downloading.")
@@ -170,7 +170,7 @@ class DownloadWorker(QThread):
                          if api_size is not None and api_size > 0 and resumed_size == api_size:
                              logging.info(f"Partial file '{filename}' is complete ({resumed_size} bytes). Renaming.")
                              os.rename(temp_file_path, file_path)
-                             self.file_cached_signal.emit(filename, qint64(api_size)) # Treat as cached/complete (cast to qint64)
+                             self.file_cached_signal.emit(filename, api_size) # Treat as cached/complete (remove cast)
                              continue # Skip to next file
                          else:
                              logging.warning(f"Partial file size {resumed_size} doesn't match API size {api_size}. "
@@ -229,16 +229,16 @@ class DownloadWorker(QThread):
 
                     if total_size == 0: # Handle zero-byte files (check after determining size)
                          logging.info(f"File '{filename}' is zero bytes. Creating empty file.")
-                         # Emit signals to show completion immediately (cast to qint64)
-                         self.new_file_signal.emit(filename, qint64(0))
+                         # Emit signals to show completion immediately (remove casts)
+                         self.new_file_signal.emit(filename, 0)
                          if not self._is_running: return
                          pathlib.Path(file_path).touch() # Create empty file directly
-                         self.progress_signal.emit(filename, qint64(0), qint64(0))
+                         self.progress_signal.emit(filename, 0, 0)
                          download_count += 1
                          continue # Skip to next file
 
-                    # Emit signal that download is starting (pass total size, cast to qint64)
-                    self.new_file_signal.emit(filename, qint64(total_size if total_size > 0 else 0))
+                    # Emit signal that download is starting (pass total size, remove cast)
+                    self.new_file_signal.emit(filename, total_size if total_size > 0 else 0)
                     if not self._is_running: return # Check stop flag again
 
                     # Initialize for download loop
@@ -282,9 +282,9 @@ class DownloadWorker(QThread):
                                      should_update = True # Ensure final update is sent
 
                                 if should_update:
-                                    # Emit progress (handle unknown total size for display, cast to qint64)
+                                    # Emit progress (handle unknown total size for display, remove casts)
                                     display_total = total_size if total_size > 0 else current_bytes # Show increasing value if total unknown
-                                    self.progress_signal.emit(filename, qint64(current_bytes), qint64(display_total))
+                                    self.progress_signal.emit(filename, current_bytes, display_total)
                                     last_update_time = current_time
                                     bytes_since_last_update = 0 # Reset byte counter
 
@@ -298,8 +298,8 @@ class DownloadWorker(QThread):
                          # If total size was unknown, update it now based on final size for consistency
                          logging.info(f"Total size for '{filename}' was unknown, setting to final size: {final_size}")
                          total_size = final_size
-                         # Optionally emit one last progress signal with the now known total size (cast to qint64)
-                         self.progress_signal.emit(filename, qint64(final_size), qint64(final_size))
+                         # Optionally emit one last progress signal with the now known total size (remove casts)
+                         self.progress_signal.emit(filename, final_size, final_size)
 
                     # Rename temporary file to final name
                     os.rename(temp_file_path, file_path)
