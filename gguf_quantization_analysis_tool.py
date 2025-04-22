@@ -139,15 +139,22 @@ class DownloadWorker(QThread):
             # --- Check if file exists and size matches (basic caching) ---
             if os.path.exists(file_path):
                 local_size = os.path.getsize(file_path)
-                # Use API size for check if available and > 0, otherwise skip size check
-                if api_size is not None and api_size > 0 and local_size == api_size:
+                # If API size is -1 (unknown), assume the local file is good
+                if api_size == -1:
+                    logging.info(f"File '{filename}' already exists and API size is unknown. Assuming file is good.")
+                    # Use local size for display since API size is unknown
+                    size_mib = int(local_size / (1024 * 1024))
+                    self.file_cached_signal.emit(filename, size_mib) # Signal UI to mark as cached
+                    continue # Skip to next file
+                # Otherwise, use API size for check if available and > 0
+                elif api_size is not None and api_size > 0 and local_size == api_size:
                     logging.info(f"File '{filename}' already exists and size matches ({api_size} bytes). Skipping download.")
                     # Convert API size to MiB for display
-                    size_mib = int(api_size / (1024 * 1024)) if api_size > 0 else 0
+                    size_mib = int(api_size / (1024 * 1024))
                     self.file_cached_signal.emit(filename, size_mib) # Signal UI to mark as cached
                     continue # Skip to next file
                 else:
-                    logging.info(f"File '{filename}' exists but size mismatch (local: {local_size}, api: {api_size}) or API size unknown. Re-downloading.")
+                    logging.info(f"File '{filename}' exists but size mismatch (local: {local_size}, api: {api_size}). Re-downloading.")
             # --- Download the file ---
             download_url = f"https://huggingface.co/{self.repo_id}/resolve/main/{filename}"
             temp_file_path = file_path + ".part" # Download to temporary file
