@@ -320,11 +320,7 @@ class DownloadWorker(QThread):
                                 # --- Throttle progress signal emission ---
                                 current_time = time.time()
                                 time_elapsed = current_time - last_update_time
-                                should_update = (
-                                    time_elapsed >= update_interval_secs or
-                                    bytes_since_last_update >= update_interval_bytes or
-                                    (total_size > 0 and current_bytes >= total_size)
-                                )
+                                should_update = (time_elapsed >= update_interval_secs or bytes_since_last_update >= update_interval_bytes or (total_size > 0 and current_bytes >= total_size))
 
                                 if should_update:
                                     # Calculate percentage and MiB for display
