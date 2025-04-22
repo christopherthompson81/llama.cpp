@@ -734,9 +734,17 @@ class MainWindow(QMainWindow):
                 # Calculate scaled value, ensuring total_bytes is not zero
                 # Use float division to avoid overflow with large integers
                 if total_bytes > 0:
-                    # Convert to float for division to prevent overflow
-                    ratio = float(clamped_current) / float(total_bytes)
-                    scaled_value = int(ratio * scaled_max)
+                    try:
+                        # Convert to float for division to prevent overflow
+                        ratio = float(clamped_current) / float(total_bytes)
+                        scaled_value = int(ratio * scaled_max)
+                    except (OverflowError, ValueError) as e:
+                        # Handle potential overflow errors with extremely large files
+                        logging.warning(f"Error calculating progress ratio: {e}. Using alternative calculation.")
+                        # Alternative calculation for very large files
+                        # Use string-based percentage calculation to avoid overflow
+                        percent_complete = 100.0 * clamped_current / total_bytes
+                        scaled_value = int((percent_complete / 100.0) * scaled_max)
                 else:
                     scaled_value = 0
                 pbar.setValue(scaled_value) # Set scaled value
