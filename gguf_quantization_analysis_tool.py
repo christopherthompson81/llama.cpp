@@ -64,9 +64,10 @@ class QtTqdm(tqdm_asyncio if tqdm_asyncio else object):
 
         # Emit the new_file_signal AFTER super init if we have a filename and size
         # This signal marks the transition from Pending to Downloading
+        logging.debug(f"QtTqdm.__init__: Checking condition for new_file_signal: filename='{self.filename}', total={self.total}")
         if self.filename and self.total is not None and self.total > 0:
             if self.new_file_signal:
-                logging.debug(f"QtTqdm.__init__: Emitting new_file_signal for '{self.filename}', total={self.total}")
+                logging.info(f"QtTqdm.__init__: >>> Emitting new_file_signal: filename='{self.filename}', total={self.total}") # More visible log
                 self.new_file_signal.emit(self.filename, self.total)
             else:
                 logging.error("QtTqdm.__init__: new_file_signal_cls was not set!")
@@ -378,9 +379,10 @@ class MainWindow(QMainWindow):
     @Slot(list)
     def populate_initial_progress_bars(self, filenames):
         """Creates all progress bars based on the initial file list."""
-        logging.debug(f"Populating initial progress bars for {len(filenames)} files.")
+        logging.info(f"Populating initial progress bars for {len(filenames)} files.") # More visible log
         self.clear_progress_bars() # Clear any previous state
         for filename in sorted(filenames): # Sort for consistent order
+            logging.debug(f"Populating: Adding key '{filename}' to self.progress_bars")
             if filename not in self.progress_bars:
                  self._create_progress_bar_widget(filename, 0, "Pending...")
             else:
@@ -424,6 +426,7 @@ class MainWindow(QMainWindow):
         Adds a progress bar if it doesn't exist, or updates the total size
         and state if it does. Called when a byte download *starts*.
         """
+        logging.info(f"add_or_update_progress_bar: Received new_file_signal for filename='{filename}', total_bytes={total_bytes}") # More visible log
         size_str = ""
         if total_bytes > 0:
             # Format size for label only if known
