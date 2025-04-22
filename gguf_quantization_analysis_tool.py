@@ -45,115 +45,69 @@ class QtTqdm(tqdm_asyncio if tqdm_asyncio else object):
     # Class attributes to hold signals temporarily during download
     new_file_signal_cls = None
     progress_signal_cls = None
-    file_checked_signal_cls = None # Signal for files processed in list mode
     # _lock is inherited from tqdm base class
 
-    def __init__(self, iterable=None, *args, **kwargs): # Accept iterable explicitly
-        logging.debug(f"QtTqdm.__init__ called. iterable={type(iterable)}, args={args}, kwargs={kwargs}")
+    def __init__(self, *args, **kwargs): # iterable is part of args/kwargs
+        logging.debug(f"QtTqdm.__init__ called. args={args}, kwargs={kwargs}")
         # Store signals from class attributes BEFORE calling super().__init__
         self.new_file_signal = QtTqdm.new_file_signal_cls
         self.progress_signal = QtTqdm.progress_signal_cls
-        self.file_checked_signal = QtTqdm.file_checked_signal_cls
 
-        # Detect mode: file list ('it' unit) or byte download ('B' unit)
-        unit = kwargs.get('unit', 'B').lower() # Default to 'B' if unit not specified
-        self.is_file_list_mode = unit != 'b'
-        self._iterable_internal = iterable # Store iterable for __iter__ override
-        logging.debug(f"QtTqdm.__init__: Detected mode: {'File List' if self.is_file_list_mode else 'Byte Download'} (unit='{unit}')")
-
-        # Extract filename from description kwarg - primarily for byte download mode
+        # Extract filename from description kwarg for signal emission
+        # This should contain the filename when used for actual file downloads
         desc = kwargs.get('desc', '')
-        # In file list mode, desc might be generic like "Fetching..."
-        # In byte mode, it should contain the filename
-        self.filename = desc.split(':')[0].strip() if ':' in desc else desc
-        if self.is_file_list_mode and self.filename == desc:
-             # Avoid using generic desc like "Fetching..." as filename
-             self.filename = None
-        logging.debug(f"QtTqdm.__init__: Initial filename='{self.filename}' from desc='{desc}'")
+        self.filename = desc.split(':')[0].strip() if ':' in desc else None # Be stricter: only use if ':' is present
+        logging.debug(f"QtTqdm.__init__: Extracted filename='{self.filename}' from desc='{desc}'")
 
         # Call parent initializer (tqdm_asyncio)
-        # Pass the original iterable back if it was provided
-        super().__init__(iterable=iterable, *args, **kwargs, disable=False) # Pass along all args/kwargs
+        super().__init__(*args, **kwargs, disable=False) # Pass along all args/kwargs
 
-        # Emit the new_file_signal only in byte download mode AFTER super init
-        # This signal now primarily updates the total size and marks as downloading
-        if not self.is_file_list_mode and self.filename and self.total is not None and self.total > 0:
+        # Emit the new_file_signal AFTER super init if we have a filename and size
+        # This signal marks the transition from Pending to Downloading
+        if self.filename and self.total is not None and self.total > 0:
             if self.new_file_signal:
-                logging.debug(f"QtTqdm.__init__ [Byte Mode]: Emitting new_file_signal for '{self.filename}', total={self.total}")
+                logging.debug(f"QtTqdm.__init__: Emitting new_file_signal for '{self.filename}', total={self.total}")
                 self.new_file_signal.emit(self.filename, self.total)
             else:
-                logging.error("QtTqdm.__init__ [Byte Mode]: new_file_signal_cls was not set!")
-        elif not self.is_file_list_mode:
-             logging.warning(f"QtTqdm.__init__ [Byte Mode]: Could not emit new_file_signal. filename='{self.filename}', total={self.total}")
-
-    def __iter__(self):
-        """
-        Override iterator to emit file_checked_signal in file list mode.
-        """
-        if self.is_file_list_mode and self._iterable_internal is not None:
-            logging.debug(f"QtTqdm.__iter__ [File List Mode]: Starting iteration.")
-            count = 0
-            for item in self._iterable_internal:
-                # Assume item is the filename string in this mode
-                filename = str(item)
-                logging.debug(f"QtTqdm.__iter__ [File List Mode]: Yielding item '{filename}'")
-                yield item
-                # Emit signal AFTER yielding, indicating processing/checking is done
-                if self.file_checked_signal:
-                    logging.debug(f"QtTqdm.__iter__ [File List Mode]: Emitting file_checked_signal for '{filename}'")
-                    self.file_checked_signal.emit(filename)
-                else:
-                    logging.error("QtTqdm.__iter__ [File List Mode]: file_checked_signal_cls was not set!")
-                count += 1
-            logging.debug(f"QtTqdm.__iter__ [File List Mode]: Finished iteration. Items processed: {count}")
-        else:
-            # Default behavior for byte download mode or if no iterable
-            logging.debug(f"QtTqdm.__iter__ [Byte Mode or No Iterable]: Delegating to super().__iter__")
-            # Need to handle the case where super() doesn't have __iter__ if tqdm_asyncio is None
-            if tqdm_asyncio and hasattr(super(), '__iter__'):
-                 yield from super().__iter__()
-            elif self._iterable_internal is not None: # Fallback if no parent iter
-                 yield from self._iterable_internal
+                logging.error("QtTqdm.__init__: new_file_signal_cls was not set!")
+        elif self.filename: # Have filename but no total (e.g., total=0)
+             logging.warning(f"QtTqdm.__init__: Got filename '{self.filename}' but total is {self.total}. Not emitting new_file_signal.")
+        # else: No filename extracted, likely the initial "Fetching..." tqdm instance, ignore.
 
 
     def display(self, msg=None, pos=None):
         """
         Overrides the default tqdm display method.
-        In byte download mode, emits a Qt signal. In file list mode, does nothing.
+        Emits a Qt signal if this instance is for a specific file download.
         """
-        # Only emit progress signals in byte download mode
-        if not self.is_file_list_mode:
-            # self.n is the current progress count, self.total is the total count.
-            if self.filename and self.total is not None and self.total > 0 and self.progress_signal:
+        # Only emit progress signals if we have a filename and total > 0
+        if self.filename and self.total is not None and self.total > 0:
+            if self.progress_signal:
                 # Clamp current value to total to avoid exceeding 100% visually
                 current_clamped = min(self.n, self.total)
-                logging.debug(f"QtTqdm.display [Byte Mode]: Emitting progress_signal for '{self.filename}': {current_clamped}/{self.total}")
+                logging.debug(f"QtTqdm.display: Emitting progress_signal for '{self.filename}': {current_clamped}/{self.total}")
                 self.progress_signal.emit(self.filename, current_clamped, self.total)
-            elif not self.progress_signal:
-                logging.error("QtTqdm.display [Byte Mode]: progress_signal_cls was not set!")
-            # Else: No filename or zero total, cannot emit progress
-        else:
-             # Optional: Log display calls in file list mode if needed for debugging
-             # logging.debug(f"QtTqdm.display [File List Mode]: Called (n={self.n}, total={self.total}). No signal emitted.")
-             pass
+            else:
+                logging.error("QtTqdm.display: progress_signal_cls was not set!")
+        # else: No filename or zero total, likely "Fetching..." instance or error, ignore.
 
         # Do NOT call super().display() or write anything to console
 
     def close(self):
         """
         Overrides the default tqdm close method.
-        Ensures the progress bar reaches 100% in byte mode and calls the parent close.
+        Ensures the progress bar reaches 100% for file downloads and calls the parent close.
         """
-        logging.debug(f"QtTqdm.close() called. Mode: {'File List' if self.is_file_list_mode else 'Byte Download'}, Filename: '{self.filename}', n={self.n}, total={self.total}")
-        # Ensure the progress bar reaches 100% on close only in byte download mode
-        if not self.is_file_list_mode:
-            if self.filename and self.total is not None and self.total > 0 and self.n < self.total:
-                if self.progress_signal:
-                    logging.debug(f"QtTqdm.close [Byte Mode]: Emitting final (100%) progress_signal for '{self.filename}'")
-                    self.progress_signal.emit(self.filename, self.total, self.total)
-                else:
-                    logging.error("QtTqdm.close [Byte Mode]: progress_signal_cls was not set!")
-            # Else: No filename, zero total, or already at 100%
+        logging.debug(f"QtTqdm.close() called. Filename: '{self.filename}', n={self.n}, total={self.total}")
+        # Ensure the progress bar reaches 100% on close only if it was a file download
+        if self.filename and self.total is not None and self.total > 0:
+             if self.n < self.total: # Only emit if not already at 100%
+                 if self.progress_signal:
+                     logging.debug(f"QtTqdm.close: Emitting final (100%) progress_signal for '{self.filename}'")
+                     self.progress_signal.emit(self.filename, self.total, self.total)
+                 else:
+                     logging.error("QtTqdm.close: progress_signal_cls was not set!")
+             # Mark as complete in the UI (handled by progress signal emission)
 
         # Call the parent class's close method to perform its cleanup
         if tqdm_asyncio: # Check if parent class exists
@@ -175,7 +129,7 @@ class DownloadWorker(QThread):
     initial_files_signal = Signal(list) # Emits the full list of files upfront
     progress_signal = Signal(str, int, int) # filename, current_bytes, total_bytes
     new_file_signal = Signal(str, int) # filename, total_bytes (emitted when byte download starts)
-    file_checked_signal = Signal(str) # filename (emitted when file is checked/processed in list mode)
+    # file_checked_signal removed
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
 
@@ -219,7 +173,7 @@ class DownloadWorker(QThread):
         # Set signals as class attributes on QtTqdm before download
         QtTqdm.new_file_signal_cls = self.new_file_signal
         QtTqdm.progress_signal_cls = self.progress_signal
-        QtTqdm.file_checked_signal_cls = self.file_checked_signal # Set the new signal
+        # QtTqdm.file_checked_signal_cls removed
         try:
             logging.info(f"Starting snapshot_download for {self.repo_id} to {self.local_dir}")
             # Check if tqdm and our class are available
@@ -253,7 +207,7 @@ class DownloadWorker(QThread):
             # --- IMPORTANT: Clean up class attributes ---
             QtTqdm.new_file_signal_cls = None
             QtTqdm.progress_signal_cls = None
-            QtTqdm.file_checked_signal_cls = None # Clear the new signal
+            # QtTqdm.file_checked_signal_cls removed
             self._is_running = False
 
     def stop(self):
@@ -510,25 +464,7 @@ class MainWindow(QMainWindow):
         pbar.setValue(0) # Reset value to 0 for download start
         pbar.setFormat("Downloading: %p%") # Set format for active download
 
-
-    @Slot(str)
-    def mark_file_as_checked(self, filename):
-        """Marks a file's progress bar as 100% (cached/checked)."""
-        if filename in self.progress_bars:
-            pbar_info = self.progress_bars[filename]
-            pbar = pbar_info['bar']
-            # Only update if it's still pending, don't overwrite Downloading/Complete
-            if pbar.format() == "Pending...":
-                logging.debug(f"mark_file_as_checked: Marking '{filename}' as 100% / Cached")
-                # Set value to max (should be 100 for pending bars)
-                pbar.setValue(pbar.maximum())
-                pbar.setFormat("Cached") # Update format
-            else:
-                logging.debug(f"mark_file_as_checked: Skipping update for '{filename}', state is '{pbar.format()}'")
-        else:
-             # Should have been created by populate_initial_progress_bars
-             logging.error(f"mark_file_as_checked: Progress bar for '{filename}' not found.")
-
+    # Slot mark_file_as_checked removed
 
     @Slot(str, int, int)
     def update_progress_bar(self, filename, current_bytes, total_bytes):
@@ -581,17 +517,19 @@ class MainWindow(QMainWindow):
         self.update_status(f"Status: {message}")
         if is_error:
             QMessageBox.critical(self, "Download Error", message)
-        else:
-            # Mark any remaining pending files as cached (they weren't downloaded)
-            logging.debug("Download finished. Marking remaining pending bars as Cached.")
-            for filename, pbar_info in self.progress_bars.items():
-                if pbar_info['bar'].format() == "Pending...":
-                    logging.debug(f"Marking '{filename}' as Cached post-download.")
-                    pbar_info['bar'].setValue(pbar_info['bar'].maximum())
-                    pbar_info['bar'].setFormat("Cached")
-            # Optionally trigger next step here
+        # Regardless of error, mark pending as cached upon completion attempt
+        logging.debug("Download process finished or errored. Marking remaining pending bars as Cached.")
+        for filename, pbar_info in self.progress_bars.items():
+            if pbar_info['bar'].format() == "Pending...":
+                logging.debug(f"Marking '{filename}' as Cached post-download.")
+                pbar_info['bar'].setValue(pbar_info['bar'].maximum()) # Set to 100%
+                pbar_info['bar'].setFormat("Cached")
+
+        if not is_error:
+            self.update_status(f"Status: {message}") # Show success message
+            # Optionally trigger next step for successful download
             pass
-        # Button re-enabled in cleanup
+        # Button re-enabled in cleanup (happens via download_thread_cleanup)
 
     @Slot()
     def download_thread_cleanup(self):
