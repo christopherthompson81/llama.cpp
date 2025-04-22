@@ -707,7 +707,9 @@ class MainWindow(QMainWindow):
                     pbar.setMaximum(100)
                 pbar.setValue(0)     # Value doesn't represent percentage here
                 # Use the received LongLong current_bytes for calculation, cast to int for division
+                print(f'Current Bytes: {current_bytes}; Total Bytes: {total_bytes}; Total Bytes Int: {total_bytes_int}')
                 size_mib = int(current_bytes) / (1024 * 1024)
+                print(f'Size MiB: {size_mib}')
                 pbar.setFormat(f"Downloading: {size_mib:.2f} MiB")
             else:
                 # Known total size (total_bytes_int > 0) - Use scaling
