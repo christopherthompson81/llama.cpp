@@ -34,15 +34,15 @@ class DownloadWorker(QThread):
     Handles the Hugging Face model download in a separate thread
     to avoid blocking the GUI.
     """
-    # Signals for detailed progress - Use qint64 for large file sizes
+    # Signals for detailed progress - Use QMetaType.LongLong for large file sizes
     initial_files_signal = Signal(list) # Emits the full list of files upfront
-    progress_signal = Signal(str, qint64, qint64) # filename, current_bytes, total_bytes
-    new_file_signal = Signal(str, qint64) # filename, total_bytes (emitted when byte download starts)
+    progress_signal = Signal(str, QMetaType.LongLong, QMetaType.LongLong) # filename, current_bytes, total_bytes
+    new_file_signal = Signal(str, QMetaType.LongLong) # filename, total_bytes (emitted when byte download starts)
     # file_checked_signal removed
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
     # Signal to mark a file as cached without downloading
-    file_cached_signal = Signal(str, qint64) # filename, total_bytes
+    file_cached_signal = Signal(str, QMetaType.LongLong) # filename, total_bytes
 
     def __init__(self, repo_id, local_dir, token):
         super().__init__()
@@ -578,7 +578,7 @@ class MainWindow(QMainWindow):
         logging.debug(f"_create_progress_bar_widget: Created bar for '{filename}' with format '{initial_format}'")
 
 
-    @Slot(str, qint64) # Use qint64
+    @Slot(str, QMetaType.LongLong) # Use QMetaType.LongLong
     def add_or_update_progress_bar(self, filename, total_bytes):
         """
         Updates a progress bar when a file download starts (or resumes).
@@ -628,7 +628,7 @@ class MainWindow(QMainWindow):
             if filename in self.progress_bars:
                  self.progress_bars[filename]['bar'].setValue(0)
 
-    @Slot(str, qint64) # Use qint64
+    @Slot(str, QMetaType.LongLong) # Use QMetaType.LongLong
     def mark_file_as_cached(self, filename, total_bytes):
         """Marks a progress bar as 'Cached' when the file already exists."""
         logging.debug(f"Marking '{filename}' as Cached ({total_bytes} bytes) in UI.")
@@ -664,10 +664,10 @@ class MainWindow(QMainWindow):
                      pbar.setValue(100)
 
 
-    @Slot(str, qint64, qint64) # Use qint64
+    @Slot(str, QMetaType.LongLong, QMetaType.LongLong) # Use QMetaType.LongLong
     def update_progress_bar(self, filename, current_bytes, total_bytes):
         """Updates the value of a specific progress bar during download."""
-        # Values received are already qint64 due to slot signature
+        # Values received are already LongLong (qint64) due to slot signature
         # Cast to Python ints for safety in calculations/comparisons if needed,
         # but qint64 should be handled correctly by QProgressBar.
         # Keep using the qint64 arguments directly for Qt calls.
