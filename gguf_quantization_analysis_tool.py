@@ -36,15 +36,15 @@ class DownloadWorker(QThread):
     Handles the Hugging Face model download in a separate thread
     to avoid blocking the GUI.
     """
-    # Signals for detailed progress - Use standard Python int
+    # Signals for detailed progress - Use QMetaType.LongLong for large file sizes
     initial_files_signal = Signal(list) # Emits the full list of files upfront
-    progress_signal = Signal(str, int, int) # filename, current_bytes, total_bytes
-    new_file_signal = Signal(str, int) # filename, total_bytes (emitted when byte download starts)
+    progress_signal = Signal(str, QMetaType.LongLong, QMetaType.LongLong) # filename, current_bytes, total_bytes
+    new_file_signal = Signal(str, QMetaType.LongLong) # filename, total_bytes (emitted when byte download starts)
     # file_checked_signal removed
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
     # Signal to mark a file as cached without downloading
-    file_cached_signal = Signal(str, int) # filename, total_bytes
+    file_cached_signal = Signal(str, QMetaType.LongLong) # filename, total_bytes
 
     def __init__(self, repo_id, local_dir, token):
         super().__init__()
@@ -580,7 +580,7 @@ class MainWindow(QMainWindow):
         self.progress_area_layout.addWidget(pbar)
         logging.debug(f"_create_progress_bar_widget: Created bar for '{filename}' with format '{initial_format}'")
 
-    @Slot(str, int) # Use int
+    @Slot(str, QMetaType.LongLong) # Use QMetaType.LongLong
     def add_or_update_progress_bar(self, filename, total_bytes):
         """
         Updates a progress bar when a file download starts (or resumes).
@@ -639,7 +639,7 @@ class MainWindow(QMainWindow):
                      new_pbar.setValue(0)
 
 
-    @Slot(str, int) # Use int
+    @Slot(str, QMetaType.LongLong) # Use QMetaType.LongLong
     def mark_file_as_cached(self, filename, total_bytes):
         """Marks a progress bar as 'Cached' when the file already exists."""
         logging.debug(f"Marking '{filename}' as Cached ({total_bytes} bytes) in UI.")
@@ -683,10 +683,10 @@ class MainWindow(QMainWindow):
                     pbar.setValue(100)
 
 
-    @Slot(str, int, int) # Use int
+    @Slot(str, QMetaType.LongLong, QMetaType.LongLong) # Use QMetaType.LongLong
     def update_progress_bar(self, filename, current_bytes, total_bytes):
         """Updates the value of a specific progress bar during download."""
-        # Values received are standard Python int
+        # Values received should be 64-bit integers (LongLong)
         # Cast to Python ints for safety in calculations/comparisons if needed,
         # but qint64 should be handled correctly by QProgressBar.
         # Keep using the qint64 arguments directly for Qt calls.
@@ -708,7 +708,8 @@ class MainWindow(QMainWindow):
                 if pbar.maximum() != 100: # Ensure max is 100 for this mode
                     pbar.setMaximum(100)
                 pbar.setValue(0)     # Value doesn't represent percentage here
-                size_mib = current_bytes / (1024 * 1024) # Use standard int
+                # Use the received LongLong current_bytes for calculation, cast to int for division
+                size_mib = int(current_bytes) / (1024 * 1024)
                 pbar.setFormat(f"Downloading: {size_mib:.2f} MiB")
             else:
                 # Known total size (total_bytes_int > 0) - Use scaling
@@ -729,14 +730,15 @@ class MainWindow(QMainWindow):
                         pbar.setFormat("Downloading: %p%")
 
                 # Calculate and update scaled progress value
+                # Use the received LongLong values for accurate calculation before scaling
                 # Clamp current_bytes to total_bytes before scaling
-                clamped_current = min(current_bytes, total_bytes)
-                # Calculate scaled value, ensuring total_bytes is not zero
-                scaled_value = int((clamped_current / total_bytes) * scaled_max) if total_bytes > 0 else 0
-                pbar.setValue(scaled_value)
+                clamped_current = min(current_bytes, total_bytes) # Comparison works with LongLong
+                # Calculate scaled value, ensuring total_bytes is not zero. Cast operands to int for division.
+                scaled_value = int((int(clamped_current) / int(total_bytes)) * scaled_max) if int(total_bytes) > 0 else 0
+                pbar.setValue(scaled_value) # Set scaled value
 
-                # Mark as complete if finished (using original byte values for check)
-                if current_bytes >= total_bytes:
+                # Mark as complete if finished (using original LongLong values for check)
+                if current_bytes >= total_bytes: # Comparison works with LongLong
                     # Check if format is already Complete to avoid redundant logging/updates
                     if pbar.format() != "Complete":
                         pbar.setFormat("Complete")
