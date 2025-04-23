@@ -125,11 +125,11 @@ class ErrorStats:
 class QuantizationWorker(QThread):
     """Worker thread for quantization analysis"""
     progress_updated = Signal(int, int)  # current, total
-    layer_completed = Signal(str, object)  # layer_name, error_stats
+    layer_completed = Signal(str, object, str)  # layer_name, error_stats, quant_type_name
     all_completed = Signal(dict)  # all_stats
     
     def __init__(self, model_path: str, quant_types: List[GGMLQuantizationType], 
-                 include_layers: List[str], exclude_layers: List[str]):
+                 include_layers: List[str], exclude_layers: List[str], db_path: str):
         super().__init__()
         self.model_path = model_path
         self.quant_types = quant_types
@@ -137,6 +137,7 @@ class QuantizationWorker(QThread):
         self.exclude_layers = exclude_layers
         self.reader = None
         self.stop_requested = False
+        self.db_path = db_path
     
     def run(self):
         try:
@@ -153,6 +154,11 @@ class QuantizationWorker(QThread):
             filtered_names = self._filter_tensor_names(tensor_names)
             logger.info(f"After filtering, {len(filtered_names)} tensors will be processed")
             
+            # Initialize database connection for this thread
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            logger.info(f"Connected to database at {self.db_path}")
+            
             all_stats = {}
             
             for quant_type in self.quant_types:
@@ -166,6 +172,35 @@ class QuantizationWorker(QThread):
                     'global': type_stats,
                     'layers': {}
                 }
+                
+                # Create or update the global entry for this quantization type
+                model_name = os.path.basename(self.model_path)
+                timestamp = datetime.now().isoformat()
+                
+                # Check if entry exists
+                cursor.execute(
+                    "SELECT id FROM quantization_results WHERE model_path = ? AND quant_type = ?",
+                    (self.model_path, quant_type.name)
+                )
+                existing = cursor.fetchone()
+                
+                if existing:
+                    logger.info(f"Found existing entry for {quant_type.name}, will update")
+                    result_id = existing[0]
+                    # Delete existing layer results
+                    cursor.execute("DELETE FROM layer_results WHERE result_id = ?", (result_id,))
+                else:
+                    logger.info(f"Creating new entry for {quant_type.name}")
+                    # Insert initial entry with placeholder values
+                    cursor.execute('''
+                    INSERT INTO quantization_results 
+                    (model_path, model_name, quant_type, rmse, max_error, percentile_95, median, timestamp)
+                    VALUES (?, ?, ?, 0, 0, 0, 0, ?)
+                    ''', (self.model_path, model_name, quant_type.name, timestamp))
+                    result_id = cursor.lastrowid
+                
+                conn.commit()
+                logger.info(f"Database entry created/updated with ID {result_id}")
                 
                 for i, tensor_name in enumerate(filtered_names):
                     if self.stop_requested:
@@ -220,12 +255,54 @@ class QuantizationWorker(QThread):
                         # Store layer stats
                         all_stats[quant_type]['layers'][tensor_name] = layer_stats
                         
+                        # Save layer stats to database
+                        try:
+                            cursor.execute('''
+                            INSERT INTO layer_results 
+                            (result_id, layer_name, rmse, max_error, percentile_95, median)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            ''', (
+                                result_id,
+                                tensor_name,
+                                layer_stats.get_rmse(),
+                                layer_stats.max_error,
+                                layer_stats.get_percentile95(),
+                                layer_stats.get_median()
+                            ))
+                            conn.commit()
+                            logger.debug(f"Saved layer stats for {tensor_name} to database")
+                        except Exception as db_err:
+                            logger.error(f"Error saving layer stats to database: {db_err}", exc_info=True)
+                        
                         # Emit signal for layer completion
-                        self.layer_completed.emit(f"{quant_type.name}::{tensor_name}", layer_stats)
+                        self.layer_completed.emit(f"{quant_type.name}::{tensor_name}", layer_stats, quant_type.name)
                         logger.info(f"Completed processing {tensor_name}, RMSE: {layer_stats.get_rmse():.6f}, Max Error: {layer_stats.max_error:.6f}")
                         
                     except Exception as e:
                         logger.error(f"Error processing {tensor_name} with {quant_type.name}: {e}", exc_info=True)
+                
+                # Update the global stats for this quantization type
+                try:
+                    cursor.execute('''
+                    UPDATE quantization_results 
+                    SET rmse = ?, max_error = ?, percentile_95 = ?, median = ?, timestamp = ?
+                    WHERE id = ?
+                    ''', (
+                        type_stats.get_rmse(),
+                        type_stats.max_error,
+                        type_stats.get_percentile95(),
+                        type_stats.get_median(),
+                        timestamp,
+                        result_id
+                    ))
+                    conn.commit()
+                    logger.info(f"Updated global stats for {quant_type.name} in database")
+                except Exception as db_err:
+                    logger.error(f"Error updating global stats in database: {db_err}", exc_info=True)
+            
+            # Close database connection
+            conn.close()
+            logger.info("Database connection closed")
             
             logger.info("Analysis completed, emitting results")
             self.all_completed.emit(all_stats)
@@ -440,7 +517,8 @@ class QuantizationAnalyzer(QMainWindow):
             self.model_path, 
             quant_types,
             include_patterns,
-            exclude_patterns
+            exclude_patterns,
+            self.db_path
         )
         
         self.worker.progress_updated.connect(self._update_progress)
@@ -476,7 +554,7 @@ class QuantizationAnalyzer(QMainWindow):
         # Force UI update
         QApplication.processEvents()
     
-    def _layer_completed(self, layer_name, stats):
+    def _layer_completed(self, layer_name, stats, quant_type_name=None):
         # Always update the table, but only show it if checkbox is checked
         row = self.layers_table.rowCount()
         self.layers_table.insertRow(row)
@@ -522,9 +600,8 @@ class QuantizationAnalyzer(QMainWindow):
         # Update histogram if enabled
         if self.histogram_checkbox.isChecked():
             self._update_histogram()
-            
-        # Save results to database
-        self._save_results_to_db()
+        
+        logger.info("Analysis completed and UI updated")
     
     def _update_histogram(self):
         self.histogram_text.clear()
@@ -551,42 +628,79 @@ class QuantizationAnalyzer(QMainWindow):
     def _init_database(self):
         """Initialize the SQLite database for storing quantization results"""
         try:
-            # Delete existing database if it exists to ensure schema is correct
-            if os.path.exists(self.db_path):
-                os.remove(self.db_path)
-                logger.info(f"Removed existing database at {self.db_path}")
-                
+            # Only create the database if it doesn't exist
+            create_tables = not os.path.exists(self.db_path)
+            
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # Create tables if they don't exist
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS quantization_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                model_path TEXT,
-                model_name TEXT,
-                quant_type TEXT,
-                rmse REAL,
-                max_error REAL,
-                percentile_95 REAL,
-                median REAL,
-                timestamp TEXT,
-                UNIQUE(model_path, quant_type)
-            )
-            ''')
-            
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS layer_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                result_id INTEGER,
-                layer_name TEXT,
-                rmse REAL,
-                max_error REAL,
-                percentile_95 REAL,
-                median REAL,
-                FOREIGN KEY(result_id) REFERENCES quantization_results(id)
-            )
-            ''')
+            if create_tables:
+                logger.info(f"Creating new database at {self.db_path}")
+                # Create tables
+                cursor.execute('''
+                CREATE TABLE IF NOT EXISTS quantization_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    model_path TEXT,
+                    model_name TEXT,
+                    quant_type TEXT,
+                    rmse REAL,
+                    max_error REAL,
+                    percentile_95 REAL,
+                    median REAL,
+                    timestamp TEXT,
+                    UNIQUE(model_path, quant_type)
+                )
+                ''')
+                
+                cursor.execute('''
+                CREATE TABLE IF NOT EXISTS layer_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    result_id INTEGER,
+                    layer_name TEXT,
+                    rmse REAL,
+                    max_error REAL,
+                    percentile_95 REAL,
+                    median REAL,
+                    FOREIGN KEY(result_id) REFERENCES quantization_results(id)
+                )
+                ''')
+            else:
+                logger.info(f"Using existing database at {self.db_path}")
+                
+                # Verify tables exist and have correct schema
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='quantization_results'")
+                if not cursor.fetchone():
+                    logger.warning("quantization_results table not found, creating it")
+                    cursor.execute('''
+                    CREATE TABLE quantization_results (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        model_path TEXT,
+                        model_name TEXT,
+                        quant_type TEXT,
+                        rmse REAL,
+                        max_error REAL,
+                        percentile_95 REAL,
+                        median REAL,
+                        timestamp TEXT,
+                        UNIQUE(model_path, quant_type)
+                    )
+                    ''')
+                
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='layer_results'")
+                if not cursor.fetchone():
+                    logger.warning("layer_results table not found, creating it")
+                    cursor.execute('''
+                    CREATE TABLE layer_results (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        result_id INTEGER,
+                        layer_name TEXT,
+                        rmse REAL,
+                        max_error REAL,
+                        percentile_95 REAL,
+                        median REAL,
+                        FOREIGN KEY(result_id) REFERENCES quantization_results(id)
+                    )
+                    ''')
             
             conn.commit()
             conn.close()
@@ -613,83 +727,7 @@ class QuantizationAnalyzer(QMainWindow):
             logger.error(f"Error checking existing results: {e}", exc_info=True)
             return False
     
-    def _save_results_to_db(self):
-        """Save analysis results to the database"""
-        if not self.all_stats:
-            return
-            
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            for quant_type, stats_dict in self.all_stats.items():
-                global_stats = stats_dict['global']
-                model_name = os.path.basename(self.model_path)
-                timestamp = datetime.now().isoformat()
-                
-                # First check if entry exists
-                cursor.execute(
-                    "SELECT id FROM quantization_results WHERE model_path = ? AND quant_type = ?",
-                    (self.model_path, quant_type.name)
-                )
-                existing = cursor.fetchone()
-                
-                if existing:
-                    # Update existing entry
-                    cursor.execute('''
-                    UPDATE quantization_results 
-                    SET rmse = ?, max_error = ?, percentile_95 = ?, median = ?, timestamp = ?
-                    WHERE id = ?
-                    ''', (
-                        global_stats.get_rmse(),
-                        global_stats.max_error,
-                        global_stats.get_percentile95(),
-                        global_stats.get_median(),
-                        timestamp,
-                        existing[0]
-                    ))
-                    result_id = existing[0]
-                else:
-                    # Insert new entry
-                    cursor.execute('''
-                    INSERT INTO quantization_results 
-                    (model_path, model_name, quant_type, rmse, max_error, percentile_95, median, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        self.model_path,
-                        model_name,
-                        quant_type.name,
-                        global_stats.get_rmse(),
-                        global_stats.max_error,
-                        global_stats.get_percentile95(),
-                        global_stats.get_median(),
-                        timestamp
-                    ))
-                    result_id = cursor.lastrowid
-                
-                # Delete existing layer results for this analysis
-                cursor.execute("DELETE FROM layer_results WHERE result_id = ?", (result_id,))
-                
-                # Insert layer results
-                for layer_name, layer_stats in stats_dict['layers'].items():
-                    cursor.execute('''
-                    INSERT INTO layer_results 
-                    (result_id, layer_name, rmse, max_error, percentile_95, median)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (
-                        result_id,
-                        layer_name,
-                        layer_stats.get_rmse(),
-                        layer_stats.max_error,
-                        layer_stats.get_percentile95(),
-                        layer_stats.get_median()
-                    ))
-            
-            conn.commit()
-            conn.close()
-            logger.info(f"Results saved to database for {os.path.basename(self.model_path)}")
-        except Exception as e:
-            logger.error(f"Error saving results to database: {e}", exc_info=True)
+    # Removed _save_results_to_db method as it's now handled in the worker thread
     
     def _load_existing_results(self):
         """Load existing results from the database if available"""
