@@ -339,19 +339,25 @@ class LlamaAPI:
                 lib_paths.append(lib_path)
             else:
                 # Check for the library in the specified directory with various possible names
-                for lib_name in ["libllama.so", "libllama.dylib", "llama.dll"]:
+                for lib_name in ["libllama.so", "libggml.so", "libllama.dylib", "llama.dll"]:
                     potential_path = os.path.join(lib_path, lib_name)
                     if os.path.exists(potential_path):
                         lib_paths.append(potential_path)
 
-        # Add default search paths
+        # Add default search paths for both libllama.so and libggml.so
         lib_paths.extend([
             "./libllama.so",
+            "./libggml.so",
             "./build/bin/libllama.so",  # Common build directory
+            "./build/bin/libggml.so",
             "../libllama.so",
+            "../libggml.so",
             "../../libllama.so",
+            "../../libggml.so",
             "/usr/local/lib/libllama.so",
+            "/usr/local/lib/libggml.so",
             "/usr/lib/libllama.so",
+            "/usr/lib/libggml.so",
         ])
 
         self.lib = None
@@ -368,7 +374,7 @@ class LlamaAPI:
                     continue
 
         if self.lib is None:
-            raise RuntimeError("Could not find libllama.so. Make sure it's in your library path or specify with --lib-path.")
+            raise RuntimeError("Could not find libllama.so or libggml.so. Make sure one of them is in your library path or specify with --lib-path.")
 
         # Define structures and function prototypes
         self._setup_api()
@@ -495,11 +501,6 @@ class LlamaAPI:
         # Try to define GGML functions - these might not all be available
         # We'll check for their existence before using them
         try:
-            # Try to set up common_model_params_to_llama if available
-            if hasattr(self.lib, 'common_model_params_to_llama'):
-                self.lib.common_model_params_to_llama.restype = self.LlamaModelParams
-                self.lib.common_model_params_to_llama.argtypes = [c_void_p]  # Simplified
-                print("DEBUG: Set up common_model_params_to_llama")
             
             # Core tensor functions
             if hasattr(self.lib, 'ggml_nelements'):
@@ -576,15 +577,9 @@ class LlamaAPI:
 
     def model_default_params(self):
         try:
-            # Try to use common_model_params_to_llama first if available
-            if hasattr(self.lib, 'common_model_params_to_llama'):
-                print("Using common_model_params_to_llama for default params")
-                # Create a dummy common_params structure
-                dummy_params = self.CommonParams()
-                dummy_params.dummy = 0
-                return self.lib.common_model_params_to_llama(ctypes.byref(dummy_params))
-            else:
-                # Fall back to default params
+            # Try to use llama_model_default_params
+            if hasattr(self.lib, 'llama_model_default_params'):
+                print("Using llama_model_default_params for default params")
                 return self.lib.llama_model_default_params()
         except Exception as e:
             print(f"Error getting model default params: {str(e)}")
@@ -672,23 +667,27 @@ class LlamaAPI:
             print("DEBUG: Initializing llama backend")
             self.lib.llama_backend_init()
 
-        # Try to use common_model_params_to_llama to get properly initialized parameters
+        # Try to get properly initialized parameters
         try:
-            # Define the function prototype
-            if hasattr(self.lib, 'common_model_params_to_llama'):
-                print("DEBUG: Using common_model_params_to_llama to initialize parameters")
-                self.lib.common_model_params_to_llama.restype = self.LlamaModelParams
-                self.lib.common_model_params_to_llama.argtypes = [c_void_p]  # Simplified - actual is more complex
-                
-                # Create a dummy common_params structure (we just need something to pass)
-                dummy_params = c_void_p()
-                params = self.lib.common_model_params_to_llama(dummy_params)
-                print("DEBUG: Successfully got model params from common_model_params_to_llama")
-            else:
-                # Fall back to default params if common_model_params_to_llama is not available
-                print("DEBUG: common_model_params_to_llama not available, using default params")
+            # First try to use llama_model_default_params
+            if hasattr(self.lib, 'llama_model_default_params'):
+                print("DEBUG: Using llama_model_default_params to initialize parameters")
                 params = self.lib.llama_model_default_params()
                 print("DEBUG: Got default model params from library")
+            else:
+                # If we're using libggml.so, we need to create parameters manually
+                print("DEBUG: Creating model params manually (likely using libggml.so)")
+                params = self.LlamaModelParams()
+                params.n_gpu_layers = 0
+                params.main_gpu = 0
+                params.tensor_split = (c_float * 8)(0, 0, 0, 0, 0, 0, 0, 0)
+                params.progress_callback = None
+                params.progress_callback_user_data = None
+                params.kv_overrides = None
+                params.vocab_only = False
+                params.use_mmap = True
+                params.use_mlock = False
+                params.check_tensors = False
         except Exception as e:
             print(f"DEBUG: Error getting params: {str(e)}")
             # Create minimal params structure
@@ -1640,7 +1639,7 @@ class MainWindow(QMainWindow):
         if not file_path:
             # If user canceled directory selection, try file selection
             file_path, _ = QFileDialog.getOpenFileName(
-                self, "Select libllama.so File", "", "Shared Libraries (*.so);;All Files (*)"
+                self, "Select Library File", "", "Shared Libraries (*.so);;All Files (*)"
             )
 
         if file_path:
