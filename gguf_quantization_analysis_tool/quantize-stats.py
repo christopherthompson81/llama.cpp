@@ -266,7 +266,7 @@ class QuantizationWorker(QThread):
                                 result_id,
                                 tensor_name,
                                 layer_stats.get_rmse(),
-                                layer_stats.max_error,
+                                f"{layer_stats.max_error:.8f}",
                                 layer_stats.get_percentile95(),
                                 layer_stats.get_median()
                             ))
@@ -290,7 +290,7 @@ class QuantizationWorker(QThread):
                     WHERE id = ?
                     ''', (
                         type_stats.get_rmse(),
-                        type_stats.max_error,
+                        f"{type_stats.max_error:.8f}",
                         type_stats.get_percentile95(),
                         type_stats.get_median(),
                         timestamp,
@@ -644,10 +644,10 @@ class QuantizationAnalyzer(QMainWindow):
                     model_path TEXT,
                     model_name TEXT,
                     quant_type TEXT,
-                    rmse REAL,
-                    max_error REAL,
-                    percentile_95 REAL,
-                    median REAL,
+                    rmse NUMERIC,
+                    max_error NUMERIC,
+                    percentile_95 NUMERIC,
+                    median NUMERIC,
                     timestamp TEXT,
                     UNIQUE(model_path, quant_type)
                 )
@@ -658,10 +658,10 @@ class QuantizationAnalyzer(QMainWindow):
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     result_id INTEGER,
                     layer_name TEXT,
-                    rmse REAL,
-                    max_error REAL,
-                    percentile_95 REAL,
-                    median REAL,
+                    rmse NUMERIC,
+                    max_error NUMERIC,
+                    percentile_95 NUMERIC,
+                    median NUMERIC,
                     FOREIGN KEY(result_id) REFERENCES quantization_results(id)
                 )
                 ''')
@@ -678,10 +678,10 @@ class QuantizationAnalyzer(QMainWindow):
                         model_path TEXT,
                         model_name TEXT,
                         quant_type TEXT,
-                        rmse REAL,
-                        max_error REAL,
-                        percentile_95 REAL,
-                        median REAL,
+                        rmse NUMERIC,
+                        max_error NUMERIC,
+                        percentile_95 NUMERIC,
+                        median NUMERIC,
                         timestamp TEXT,
                         UNIQUE(model_path, quant_type)
                     )
@@ -695,10 +695,10 @@ class QuantizationAnalyzer(QMainWindow):
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         result_id INTEGER,
                         layer_name TEXT,
-                        rmse REAL,
-                        max_error REAL,
-                        percentile_95 REAL,
-                        median REAL,
+                        rmse NUMERIC,
+                        max_error NUMERIC,
+                        percentile_95 NUMERIC,
+                        median NUMERIC,
                         FOREIGN KEY(result_id) REFERENCES quantization_results(id)
                     )
                     ''')
