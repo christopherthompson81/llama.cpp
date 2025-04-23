@@ -146,3 +146,6 @@ poetry.toml
 # Local scripts
 /run-vim.sh
 /run-chat.sh
+gguf_quantization_analysis_tool/llama-3.2-1B-instruct-f16-imatrix.dat
+gguf_quantization_analysis_tool/quantization_stats.db
+gguf_quantization_analysis_tool/wiki.train.raw

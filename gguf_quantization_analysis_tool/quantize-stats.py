@@ -348,7 +348,7 @@ class LlamaAPI:
                 print(f"DEBUG: Setting up llama_backend_init")
                 self.lib.llama_backend_init.argtypes = []
                 self.lib.llama_backend_init.restype = None
-            
+
             # Model loading and freeing
             self.lib.llama_model_load_from_file.restype = c_void_p
             self.lib.llama_model_load_from_file.argtypes = [c_char_p, c_void_p]
@@ -366,22 +366,22 @@ class LlamaAPI:
             self.lib.llama_free.argtypes = [c_void_p]
             self.lib.llama_free.restype = None
             print(f"DEBUG: Set up llama_free")
-            
+
             # Default params functions
             self.lib.llama_model_default_params.restype = LlamaModelParams
             self.lib.llama_model_default_params.argtypes = []
             print(f"DEBUG: Set up llama_model_default_params")
-            
+
             self.lib.llama_context_default_params.restype = LlamaContextParams
             self.lib.llama_context_default_params.argtypes = []
             print(f"DEBUG: Set up llama_context_default_params")
-            
+
             # Error reporting
             if hasattr(self.lib, 'llama_last_error'):
                 self.lib.llama_last_error.restype = c_char_p
                 self.lib.llama_last_error.argtypes = []
                 print(f"DEBUG: Set up llama_last_error")
-                
+
         except Exception as e:
             print(f"DEBUG: EXCEPTION setting up function prototypes: {str(e)}")
             import traceback
@@ -532,19 +532,19 @@ class LlamaAPI:
 
     def load_model(self, model_path):
         print(f"DEBUG: Starting to load model from {model_path}")
-        
+
         # Verify the model file exists
         if not os.path.isfile(model_path):
             raise RuntimeError(f"Model file does not exist: {model_path}")
-        
+
         # Initialize llama backend first
         if hasattr(self.lib, 'llama_backend_init'):
             print(f"DEBUG: Initializing llama backend")
             self.lib.llama_backend_init()
-        
+
         # Get default parameters
         params = self.model_default_params()
-        
+
         # Set conservative parameters to avoid memory issues
         params.vocab_only = False
         params.use_mlock = False
@@ -560,37 +560,37 @@ class LlamaAPI:
         params.main_device = 0
         params.devices = None
         params.check_tensors = False
-        
+
         print(f"DEBUG: Created model params, use_mlock={params.use_mlock}, use_mmap={params.use_mmap}, n_gpu_layers={params.n_gpu_layers}")
-        
+
         # Create a pointer to the params structure
         params_ptr = ctypes.byref(params)
         print(f"DEBUG: Created params pointer: {params_ptr}")
-        
+
         # Try to load the model with more detailed error handling
         print(f"DEBUG: About to call llama_model_load_from_file")
         try:
             # Ensure the path is properly encoded
             encoded_path = model_path.encode('utf-8')
             print(f"DEBUG: Encoded path: {encoded_path}")
-            
+
             # Set correct return and argument types
             self.lib.llama_model_load_from_file.restype = c_void_p
             self.lib.llama_model_load_from_file.argtypes = [c_char_p, c_void_p]
-            
+
             # Load the model
             model = self.lib.llama_model_load_from_file(encoded_path, params_ptr)
             print(f"DEBUG: llama_model_load_from_file returned: {model}")
-            
+
             if not model:
                 raise RuntimeError(f"Failed to load model: {model_path}")
-            
+
             return model
         except Exception as e:
             print(f"DEBUG: EXCEPTION in load_model: {str(e)}")
             import traceback
             traceback.print_exc()
-            
+
             # Try to get more information about the error
             if hasattr(self.lib, 'llama_last_error'):
                 try:
@@ -600,13 +600,13 @@ class LlamaAPI:
                         print(f"DEBUG: llama_last_error: {error_msg.decode('utf-8', errors='replace')}")
                 except:
                     pass
-            
+
             raise
 
     def init_context(self, model):
         print(f"DEBUG: Starting to initialize context from model {model}")
         params = self.context_default_params()
-        
+
         # Set conservative parameters
         params.n_ctx = 128  # Smaller context to reduce memory usage
         params.n_batch = 512
@@ -636,19 +636,19 @@ class LlamaAPI:
         params.no_perf = True
         params.abort_callback = None
         params.abort_callback_data = None
-        
+
         print(f"DEBUG: Created context params, n_ctx={params.n_ctx}, n_threads={params.n_threads}")
-        
+
         # Create a pointer to the params structure
         params_ptr = ctypes.byref(params)
         print(f"DEBUG: Created context params pointer: {params_ptr}")
-        
+
         print(f"DEBUG: About to call llama_init_from_model")
         try:
             # Set correct return and argument types
             self.lib.llama_init_from_model.restype = c_void_p
             self.lib.llama_init_from_model.argtypes = [c_void_p, c_void_p]
-            
+
             ctx = self.lib.llama_init_from_model(model, params_ptr)
             print(f"DEBUG: llama_init_from_model returned: {ctx}")
             if not ctx:
@@ -663,7 +663,7 @@ class LlamaAPI:
                     except:
                         pass
                 raise RuntimeError("Failed to create context")
-            
+
             return ctx
         except Exception as e:
             print(f"DEBUG: EXCEPTION in init_context: {str(e)}")

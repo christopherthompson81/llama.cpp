@@ -20,6 +20,8 @@
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
 
+#define QK_K 256
+
 struct quantize_stats_params {
     std::string model = DEFAULT_MODEL_PATH;
     bool verbose = false;
