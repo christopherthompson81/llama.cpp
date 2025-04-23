@@ -277,27 +277,41 @@ class DatabaseManager:
 
 # LLAMA C API wrapper
 class LlamaAPI:
-    def __init__(self):
+    def __init__(self, lib_path=None):
         # Find the library
-        lib_paths = [
+        lib_paths = []
+        
+        # If a specific path was provided, check there first
+        if lib_path:
+            # Check for direct path to the library
+            if os.path.isfile(lib_path):
+                lib_paths.append(lib_path)
+            else:
+                # Check for the library in the specified directory
+                lib_paths.append(os.path.join(lib_path, "libllama.so"))
+        
+        # Add default search paths
+        lib_paths.extend([
             "./libllama.so",
             "../libllama.so",
             "../../libllama.so",
             "/usr/local/lib/libllama.so",
             "/usr/lib/libllama.so",
-        ]
+        ])
         
         self.lib = None
         for path in lib_paths:
             if os.path.exists(path):
                 try:
                     self.lib = ctypes.CDLL(path)
+                    print(f"Successfully loaded library from: {path}")
                     break
-                except:
+                except Exception as e:
+                    print(f"Failed to load {path}: {str(e)}")
                     continue
         
         if self.lib is None:
-            raise RuntimeError("Could not find libllama.so. Make sure it's in your library path.")
+            raise RuntimeError("Could not find libllama.so. Make sure it's in your library path or specify with --lib-path.")
         
         # Define structures and function prototypes
         self._setup_api()
@@ -580,18 +594,19 @@ class QuantizationWorker(QThread):
     progress_updated = Signal(int, str)
     finished = Signal(dict)
     
-    def __init__(self, model_path, include_layers, exclude_layers, quant_types):
+    def __init__(self, model_path, include_layers, exclude_layers, quant_types, lib_path=None):
         super().__init__()
         self.model_path = model_path
         self.include_layers = include_layers
         self.exclude_layers = exclude_layers
         self.quant_types = quant_types
+        self.lib_path = lib_path
         self.stop_requested = False
     
     def run(self):
         try:
             results = {}
-            llama_api = LlamaAPI()
+            llama_api = LlamaAPI(self.lib_path)
             
             # Load model
             self.progress_updated.emit(0, "Loading model...")
@@ -714,6 +729,7 @@ class MainWindow(QMainWindow):
         self.current_model_id = None
         self.current_run_id = None
         self.worker = None
+        self.lib_path = None
         
         self.init_ui()
     
@@ -755,9 +771,18 @@ class MainWindow(QMainWindow):
         browse_button = QPushButton("Browse...")
         browse_button.clicked.connect(self.browse_model)
         
+        self.lib_path_edit = QLineEdit()
+        self.lib_path_edit.setPlaceholderText("Path to libllama.so or directory containing it")
+        browse_lib_button = QPushButton("Browse...")
+        browse_lib_button.clicked.connect(self.browse_lib)
+        
         model_layout.addWidget(QLabel("Model Path:"), 0, 0)
         model_layout.addWidget(self.model_path_edit, 0, 1)
         model_layout.addWidget(browse_button, 0, 2)
+        
+        model_layout.addWidget(QLabel("Library Path:"), 1, 0)
+        model_layout.addWidget(self.lib_path_edit, 1, 1)
+        model_layout.addWidget(browse_lib_button, 1, 2)
         
         # Layer filtering group
         filter_group = QGroupBox("Layer Filtering")
@@ -918,11 +943,28 @@ class MainWindow(QMainWindow):
         if file_path:
             self.model_path_edit.setText(file_path)
     
+    def browse_lib(self):
+        # Allow selecting either a file or directory
+        file_path = QFileDialog.getExistingDirectory(self, "Select Directory Containing libllama.so")
+        
+        if not file_path:
+            # If user canceled directory selection, try file selection
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "Select libllama.so File", "", "Shared Libraries (*.so);;All Files (*)"
+            )
+        
+        if file_path:
+            self.lib_path_edit.setText(file_path)
+            self.lib_path = file_path
+    
     def run_analysis(self):
         model_path = self.model_path_edit.text()
         if not model_path:
             QMessageBox.warning(self, "Error", "Please select a model file")
             return
+        
+        # Get library path
+        self.lib_path = self.lib_path_edit.text()
         
         # Get include/exclude patterns
         include_patterns = [p.strip() for p in self.include_layers_edit.text().split(",") if p.strip()]
@@ -954,7 +996,7 @@ class MainWindow(QMainWindow):
         self.progress_label.setText("Starting analysis...")
         
         # Create and start worker thread
-        self.worker = QuantizationWorker(model_path, include_patterns, exclude_patterns, quant_types)
+        self.worker = QuantizationWorker(model_path, include_patterns, exclude_patterns, quant_types, self.lib_path)
         self.worker.progress_updated.connect(self.update_progress)
         self.worker.finished.connect(self.analysis_finished)
         self.worker.start()
@@ -1107,12 +1149,19 @@ def main():
     parser.add_argument("-L", "--exclude-layer", action="append", help="Exclude layers matching pattern")
     parser.add_argument("-t", "--type", action="append", help="Only test given type (q4_0, q4_1, etc.)")
     parser.add_argument("--gui", action="store_true", help="Launch the GUI")
+    parser.add_argument("--lib-path", type=str, help="Path to libllama.so or directory containing it")
     
     args = parser.parse_args()
     
     if args.gui or len(sys.argv) == 1:
         app = QApplication(sys.argv)
         window = MainWindow()
+        
+        # If lib-path was specified on command line, set it in the GUI
+        if args.lib_path:
+            window.lib_path = args.lib_path
+            window.lib_path_edit.setText(args.lib_path)
+            
         window.show()
         sys.exit(app.exec())
     else:
@@ -1121,6 +1170,17 @@ def main():
         # but using the Python API
         print("Command-line mode not fully implemented yet")
         print("Use --gui to launch the graphical interface")
+        
+        try:
+            # Initialize the API with the specified library path
+            llama_api = LlamaAPI(args.lib_path)
+            print(f"Successfully initialized LlamaAPI")
+            
+            # Here would be the implementation of the command-line functionality
+            # ...
+            
+        except Exception as e:
+            print(f"Error: {str(e)}")
 
 if __name__ == "__main__":
     main()
