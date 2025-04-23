@@ -398,6 +398,15 @@ class LlamaAPI:
             ]
 
         self.LlamaModelParams = LlamaModelParams
+        
+        # Define common_params structure for use with common_model_params_to_llama
+        class CommonParams(Structure):
+            _fields_ = [
+                # We don't need to define all fields, just enough to create a valid structure
+                ("dummy", c_int),
+            ]
+            
+        self.CommonParams = CommonParams
 
         # Define context params structure - exactly matching llama.h
         class LlamaContextParams(Structure):
@@ -486,6 +495,12 @@ class LlamaAPI:
         # Try to define GGML functions - these might not all be available
         # We'll check for their existence before using them
         try:
+            # Try to set up common_model_params_to_llama if available
+            if hasattr(self.lib, 'common_model_params_to_llama'):
+                self.lib.common_model_params_to_llama.restype = self.LlamaModelParams
+                self.lib.common_model_params_to_llama.argtypes = [c_void_p]  # Simplified
+                print("DEBUG: Set up common_model_params_to_llama")
+            
             # Core tensor functions
             if hasattr(self.lib, 'ggml_nelements'):
                 self.lib.ggml_nelements.restype = c_int64
@@ -561,7 +576,16 @@ class LlamaAPI:
 
     def model_default_params(self):
         try:
-            return self.lib.llama_model_default_params()
+            # Try to use common_model_params_to_llama first if available
+            if hasattr(self.lib, 'common_model_params_to_llama'):
+                print("Using common_model_params_to_llama for default params")
+                # Create a dummy common_params structure
+                dummy_params = self.CommonParams()
+                dummy_params.dummy = 0
+                return self.lib.common_model_params_to_llama(ctypes.byref(dummy_params))
+            else:
+                # Fall back to default params
+                return self.lib.llama_model_default_params()
         except Exception as e:
             print(f"Error getting model default params: {str(e)}")
             # Create a default params structure manually
@@ -648,12 +672,25 @@ class LlamaAPI:
             print("DEBUG: Initializing llama backend")
             self.lib.llama_backend_init()
 
-        # Get default parameters directly from the library
+        # Try to use common_model_params_to_llama to get properly initialized parameters
         try:
-            params = self.lib.llama_model_default_params()
-            print("DEBUG: Got default model params from library")
+            # Define the function prototype
+            if hasattr(self.lib, 'common_model_params_to_llama'):
+                print("DEBUG: Using common_model_params_to_llama to initialize parameters")
+                self.lib.common_model_params_to_llama.restype = self.LlamaModelParams
+                self.lib.common_model_params_to_llama.argtypes = [c_void_p]  # Simplified - actual is more complex
+                
+                # Create a dummy common_params structure (we just need something to pass)
+                dummy_params = c_void_p()
+                params = self.lib.common_model_params_to_llama(dummy_params)
+                print("DEBUG: Successfully got model params from common_model_params_to_llama")
+            else:
+                # Fall back to default params if common_model_params_to_llama is not available
+                print("DEBUG: common_model_params_to_llama not available, using default params")
+                params = self.lib.llama_model_default_params()
+                print("DEBUG: Got default model params from library")
         except Exception as e:
-            print(f"DEBUG: Error getting default params: {str(e)}")
+            print(f"DEBUG: Error getting params: {str(e)}")
             # Create minimal params structure
             params = self.LlamaModelParams()
             params.n_gpu_layers = 0
