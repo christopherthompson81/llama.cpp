@@ -5,8 +5,10 @@ import argparse
 import numpy as np
 import logging
 import time
+import sqlite3
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -261,6 +263,10 @@ class QuantizationAnalyzer(QMainWindow):
         self.model_path = ""
         self.worker = None
         self.all_stats = {}
+        self.db_path = os.path.join(os.path.dirname(__file__), "quantization_stats.db")
+        
+        # Initialize database
+        self._init_database()
         
         self._setup_ui()
     
@@ -314,6 +320,7 @@ class QuantizationAnalyzer(QMainWindow):
         self.per_layer_checkbox = QCheckBox("Show per-layer statistics")
         self.per_layer_checkbox.setChecked(True)  # Enable by default
         self.histogram_checkbox = QCheckBox("Show error histogram")
+        self.histogram_checkbox.setChecked(True)  # Enable by default
         
         options_layout.addWidget(self.per_layer_checkbox)
         options_layout.addWidget(self.histogram_checkbox)
@@ -383,10 +390,29 @@ class QuantizationAnalyzer(QMainWindow):
             self.model_path = file_path
             self.model_path_label.setText(os.path.basename(file_path))
             self.analyze_button.setEnabled(True)
+            
+            # Check if we have existing results and load them
+            self._load_existing_results()
     
     def _start_analysis(self):
         if not self.model_path:
             return
+        
+        # Check if we already have results for this model and quantization type
+        selected_quant = self.quant_combo.currentData()
+        if self._check_existing_results(self.model_path, selected_quant.name):
+            # Ask user if they want to overwrite
+            from PySide6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self, 
+                'Overwrite Existing Results',
+                f'Analysis results already exist for {os.path.basename(self.model_path)} with {selected_quant.name}. Overwrite?',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            
+            if reply == QMessageBox.No:
+                return
         
         logger.info(f"Starting analysis for model: {self.model_path}")
         
@@ -396,7 +422,6 @@ class QuantizationAnalyzer(QMainWindow):
         self.histogram_text.clear()
         
         # Get selected quantization types
-        selected_quant = self.quant_combo.currentData()
         quant_types = [selected_quant]
         logger.info(f"Selected quantization type: {selected_quant.name}")
         
@@ -491,9 +516,15 @@ class QuantizationAnalyzer(QMainWindow):
             self.summary_table.setItem(row, 3, QTableWidgetItem(f"{global_stats.get_percentile95():.4f}"))
             self.summary_table.setItem(row, 4, QTableWidgetItem(f"{global_stats.get_median():.4f}"))
         
+        # Make sure we're showing the summary tab
+        self.results_tabs.setCurrentIndex(0)
+        
         # Update histogram if enabled
         if self.histogram_checkbox.isChecked():
             self._update_histogram()
+            
+        # Save results to database
+        self._save_results_to_db()
     
     def _update_histogram(self):
         self.histogram_text.clear()
@@ -523,6 +554,166 @@ def parse_args():
     return parser.parse_args()
 
 
+    def _init_database(self):
+        """Initialize the SQLite database for storing quantization results"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Create tables if they don't exist
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS quantization_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_path TEXT,
+                model_name TEXT,
+                quant_type TEXT,
+                rmse REAL,
+                max_error REAL,
+                percentile_95 REAL,
+                median REAL,
+                timestamp TEXT,
+                UNIQUE(model_path, quant_type)
+            )
+            ''')
+            
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS layer_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_id INTEGER,
+                layer_name TEXT,
+                rmse REAL,
+                max_error REAL,
+                percentile_95 REAL,
+                median REAL,
+                FOREIGN KEY(result_id) REFERENCES quantization_results(id)
+            )
+            ''')
+            
+            conn.commit()
+            conn.close()
+            logger.info(f"Database initialized at {self.db_path}")
+        except Exception as e:
+            logger.error(f"Error initializing database: {e}", exc_info=True)
+    
+    def _check_existing_results(self, model_path, quant_type):
+        """Check if results already exist for this model and quantization type"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "SELECT id FROM quantization_results WHERE model_path = ? AND quant_type = ?",
+                (model_path, quant_type)
+            )
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            return result is not None
+        except Exception as e:
+            logger.error(f"Error checking existing results: {e}", exc_info=True)
+            return False
+    
+    def _save_results_to_db(self):
+        """Save analysis results to the database"""
+        if not self.all_stats:
+            return
+            
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            for quant_type, stats_dict in self.all_stats.items():
+                global_stats = stats_dict['global']
+                model_name = os.path.basename(self.model_path)
+                timestamp = datetime.now().isoformat()
+                
+                # Insert or replace global results
+                cursor.execute('''
+                INSERT OR REPLACE INTO quantization_results 
+                (model_path, model_name, quant_type, rmse, max_error, percentile_95, median, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    self.model_path,
+                    model_name,
+                    quant_type.name,
+                    global_stats.get_rmse(),
+                    global_stats.max_error,
+                    global_stats.get_percentile95(),
+                    global_stats.get_median(),
+                    timestamp
+                ))
+                
+                result_id = cursor.lastrowid
+                
+                # Delete existing layer results for this analysis
+                cursor.execute("DELETE FROM layer_results WHERE result_id = ?", (result_id,))
+                
+                # Insert layer results
+                for layer_name, layer_stats in stats_dict['layers'].items():
+                    cursor.execute('''
+                    INSERT INTO layer_results 
+                    (result_id, layer_name, rmse, max_error, percentile_95, median)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (
+                        result_id,
+                        layer_name,
+                        layer_stats.get_rmse(),
+                        layer_stats.max_error,
+                        layer_stats.get_percentile95(),
+                        layer_stats.get_median()
+                    ))
+            
+            conn.commit()
+            conn.close()
+            logger.info(f"Results saved to database for {os.path.basename(self.model_path)}")
+        except Exception as e:
+            logger.error(f"Error saving results to database: {e}", exc_info=True)
+    
+    def _load_existing_results(self):
+        """Load existing results from the database if available"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Get all quantization types for this model
+            cursor.execute(
+                "SELECT quant_type, rmse, max_error, percentile_95, median FROM quantization_results WHERE model_path = ?",
+                (self.model_path,)
+            )
+            
+            results = cursor.fetchall()
+            
+            if results:
+                # Clear existing results
+                self.summary_table.setRowCount(0)
+                
+                # Add results to summary table
+                for result in results:
+                    quant_type, rmse, max_error, percentile_95, median = result
+                    
+                    row = self.summary_table.rowCount()
+                    self.summary_table.insertRow(row)
+                    
+                    self.summary_table.setItem(row, 0, QTableWidgetItem(quant_type))
+                    self.summary_table.setItem(row, 1, QTableWidgetItem(f"{rmse:.8f}"))
+                    self.summary_table.setItem(row, 2, QTableWidgetItem(f"{max_error:.8f}"))
+                    self.summary_table.setItem(row, 3, QTableWidgetItem(f"{percentile_95:.4f}"))
+                    self.summary_table.setItem(row, 4, QTableWidgetItem(f"{median:.4f}"))
+                
+                # Set the combo box to the first quantization type found
+                first_quant_type = results[0][0]
+                index = self.quant_combo.findText(first_quant_type)
+                if index >= 0:
+                    self.quant_combo.setCurrentIndex(index)
+                
+                logger.info(f"Loaded {len(results)} existing results for {os.path.basename(self.model_path)}")
+            
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error loading existing results: {e}", exc_info=True)
+
+
 def main():
     args = parse_args()
     
@@ -537,6 +728,7 @@ def main():
         window.model_path = args.model
         window.model_path_label.setText(os.path.basename(args.model))
         window.analyze_button.setEnabled(True)
+        window._load_existing_results()
     
     window.show()
     logger.info("Application window displayed")
