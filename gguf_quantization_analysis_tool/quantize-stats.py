@@ -3,8 +3,20 @@ import sys
 import os
 import argparse
 import numpy as np
+import logging
+import time
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger("QuantizationAnalyzer")
 
 # Add parent directory to path to import gguf
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -36,16 +48,34 @@ class ErrorStats:
     
     def update(self, original: np.ndarray, quantized: np.ndarray):
         """Update error statistics with new data"""
+        logger.debug(f"Calculating differences between original and quantized data")
         diff = original - quantized
         squared_diff = diff * diff
-        self.total_error += np.sum(squared_diff)
-        self.max_error = max(self.max_error, np.max(np.abs(diff)))
+        
+        logger.debug(f"Summing squared differences")
+        sum_squared = np.sum(squared_diff)
+        self.total_error += sum_squared
+        
+        logger.debug(f"Finding maximum absolute error")
+        max_abs_error = np.max(np.abs(diff))
+        self.max_error = max(self.max_error, max_abs_error)
+        
         self.num_samples += original.size
         
-        # Update histogram
-        for d in np.abs(diff.flatten()):
-            bucket = min(int(d / HISTOGRAM_RANGE * HISTOGRAM_BUCKETS), HISTOGRAM_BUCKETS - 1)
-            self.error_histogram[bucket] += 1
+        logger.debug(f"Updating histogram with {original.size} samples")
+        # Update histogram - this can be slow for large tensors
+        # Process in batches to avoid memory issues
+        batch_size = 1000000  # Process 1M elements at a time
+        flattened = np.abs(diff.flatten())
+        
+        for i in range(0, len(flattened), batch_size):
+            batch = flattened[i:i+batch_size]
+            buckets = np.minimum((batch / HISTOGRAM_RANGE * HISTOGRAM_BUCKETS).astype(np.int64), 
+                                HISTOGRAM_BUCKETS - 1)
+            for b in range(HISTOGRAM_BUCKETS):
+                self.error_histogram[b] += np.sum(buckets == b)
+        
+        logger.debug(f"Update completed. RMSE: {self.get_rmse():.6f}, Max Error: {self.max_error:.6f}")
     
     def combine(self, other: 'ErrorStats'):
         """Combine with another ErrorStats object"""
@@ -108,18 +138,27 @@ class QuantizationWorker(QThread):
     
     def run(self):
         try:
+            logger.info(f"Starting to load model from {self.model_path}")
+            start_time = time.time()
             self.reader = GGUFReader(self.model_path)
+            logger.info(f"Model loaded in {time.time() - start_time:.2f} seconds")
             
             # Get all tensor names
+            logger.info("Getting tensor names")
             tensor_names = [tensor.name for tensor in self.reader.tensors]
+            logger.info(f"Found {len(tensor_names)} tensors in the model")
+            
             filtered_names = self._filter_tensor_names(tensor_names)
+            logger.info(f"After filtering, {len(filtered_names)} tensors will be processed")
             
             all_stats = {}
             
             for quant_type in self.quant_types:
                 if self.stop_requested:
+                    logger.info("Stop requested, breaking out of quantization loop")
                     break
                 
+                logger.info(f"Starting analysis for quantization type: {quant_type.name}")
                 type_stats = ErrorStats()
                 all_stats[quant_type] = {
                     'global': type_stats,
@@ -128,32 +167,50 @@ class QuantizationWorker(QThread):
                 
                 for i, tensor_name in enumerate(filtered_names):
                     if self.stop_requested:
+                        logger.info("Stop requested, breaking out of tensor processing loop")
                         break
                     
+                    logger.info(f"Processing tensor {i+1}/{len(filtered_names)}: {tensor_name}")
                     self.progress_updated.emit(i, len(filtered_names))
                     
                     # Get tensor data
+                    logger.debug(f"Getting tensor data for {tensor_name}")
                     tensor = next(t for t in self.reader.tensors if t.name == tensor_name)
                     
                     # Skip tensors that are already quantized
                     if tensor.tensor_type != GGMLQuantizationType.F32 and tensor.tensor_type != GGMLQuantizationType.F16:
+                        logger.info(f"Skipping {tensor_name} as it's already quantized: {tensor.tensor_type.name}")
                         continue
                     
                     # Get tensor data as float32
+                    logger.debug(f"Converting tensor data to float32")
+                    start_time = time.time()
                     original_data = tensor.data.astype(np.float32)
+                    logger.debug(f"Tensor shape: {original_data.shape}, conversion took {time.time() - start_time:.2f} seconds")
                     
                     # Skip tensors with dimensions not compatible with the quantization type
                     if original_data.shape[-1] % 32 != 0:  # Most quants need multiple of 32
+                        logger.info(f"Skipping {tensor_name} as its last dimension {original_data.shape[-1]} is not a multiple of 32")
                         continue
                     
                     try:
                         # Quantize and dequantize
+                        logger.debug(f"Starting quantization of {tensor_name}")
+                        start_time = time.time()
                         quantized_data = quantize(original_data, quant_type)
+                        logger.debug(f"Quantization completed in {time.time() - start_time:.2f} seconds")
+                        
+                        logger.debug(f"Starting dequantization")
+                        start_time = time.time()
                         dequantized_data = dequantize(quantized_data, quant_type)
+                        logger.debug(f"Dequantization completed in {time.time() - start_time:.2f} seconds")
                         
                         # Calculate error statistics
+                        logger.debug(f"Calculating error statistics")
+                        start_time = time.time()
                         layer_stats = ErrorStats()
                         layer_stats.update(original_data, dequantized_data)
+                        logger.debug(f"Error calculation completed in {time.time() - start_time:.2f} seconds")
                         
                         # Update global stats
                         type_stats.combine(layer_stats)
@@ -163,14 +220,16 @@ class QuantizationWorker(QThread):
                         
                         # Emit signal for layer completion
                         self.layer_completed.emit(f"{quant_type.name}::{tensor_name}", layer_stats)
+                        logger.info(f"Completed processing {tensor_name}, RMSE: {layer_stats.get_rmse():.6f}, Max Error: {layer_stats.max_error:.6f}")
                         
                     except Exception as e:
-                        print(f"Error processing {tensor_name} with {quant_type.name}: {e}")
+                        logger.error(f"Error processing {tensor_name} with {quant_type.name}: {e}", exc_info=True)
             
+            logger.info("Analysis completed, emitting results")
             self.all_completed.emit(all_stats)
             
         except Exception as e:
-            print(f"Error in worker thread: {e}")
+            logger.error(f"Error in worker thread: {e}", exc_info=True)
     
     def _filter_tensor_names(self, tensor_names: List[str]) -> List[str]:
         """Filter tensor names based on include/exclude patterns"""
@@ -328,6 +387,8 @@ class QuantizationAnalyzer(QMainWindow):
         if not self.model_path:
             return
         
+        logger.info(f"Starting analysis for model: {self.model_path}")
+        
         # Clear previous results
         self.summary_table.setRowCount(0)
         self.layers_table.setRowCount(0)
@@ -336,10 +397,14 @@ class QuantizationAnalyzer(QMainWindow):
         # Get selected quantization types
         selected_quant = self.quant_combo.currentData()
         quant_types = [selected_quant]
+        logger.info(f"Selected quantization type: {selected_quant.name}")
         
         # Get include/exclude patterns
         include_patterns = [line.strip() for line in self.include_edit.toPlainText().split('\n') if line.strip()]
         exclude_patterns = [line.strip() for line in self.exclude_edit.toPlainText().split('\n') if line.strip()]
+        
+        logger.info(f"Include patterns: {include_patterns}")
+        logger.info(f"Exclude patterns: {exclude_patterns}")
         
         # Create and start worker thread
         self.worker = QuantizationWorker(
@@ -357,6 +422,7 @@ class QuantizationAnalyzer(QMainWindow):
         self.stop_button.setEnabled(True)
         self.progress_bar.setValue(0)
         
+        logger.info("Starting worker thread")
         self.worker.start()
     
     def _stop_analysis(self):
@@ -438,16 +504,20 @@ def parse_args():
 def main():
     args = parse_args()
     
+    logger.info("Starting GGUF Quantization Analyzer")
+    
     app = QApplication(sys.argv)
     window = QuantizationAnalyzer()
     
     # If model path provided via command line
     if args.model:
+        logger.info(f"Model path provided via command line: {args.model}")
         window.model_path = args.model
         window.model_path_label.setText(os.path.basename(args.model))
         window.analyze_button.setEnabled(True)
     
     window.show()
+    logger.info("Application window displayed")
     sys.exit(app.exec())
 
 
