@@ -404,6 +404,5 @@ private:
 
 const char * llm_type_name(llm_type type);
 
-// For internal test use
-// TODO: remove
+// For internal test use and quantization analysis
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model);
