@@ -312,6 +312,7 @@ class QuantizationAnalyzer(QMainWindow):
         # Options
         options_layout = QHBoxLayout()
         self.per_layer_checkbox = QCheckBox("Show per-layer statistics")
+        self.per_layer_checkbox.setChecked(True)  # Enable by default
         self.histogram_checkbox = QCheckBox("Show error histogram")
         
         options_layout.addWidget(self.per_layer_checkbox)
@@ -406,6 +407,9 @@ class QuantizationAnalyzer(QMainWindow):
         logger.info(f"Include patterns: {include_patterns}")
         logger.info(f"Exclude patterns: {exclude_patterns}")
         
+        # Show the summary tab initially
+        self.results_tabs.setCurrentIndex(0)
+        
         # Create and start worker thread
         self.worker = QuantizationWorker(
             self.model_path, 
@@ -422,6 +426,14 @@ class QuantizationAnalyzer(QMainWindow):
         self.stop_button.setEnabled(True)
         self.progress_bar.setValue(0)
         
+        # Initialize the summary table with a placeholder row
+        self.summary_table.setRowCount(1)
+        self.summary_table.setItem(0, 0, QTableWidgetItem(selected_quant.name))
+        self.summary_table.setItem(0, 1, QTableWidgetItem("Calculating..."))
+        self.summary_table.setItem(0, 2, QTableWidgetItem("Calculating..."))
+        self.summary_table.setItem(0, 3, QTableWidgetItem("Calculating..."))
+        self.summary_table.setItem(0, 4, QTableWidgetItem("Calculating..."))
+        
         logger.info("Starting worker thread")
         self.worker.start()
     
@@ -435,11 +447,12 @@ class QuantizationAnalyzer(QMainWindow):
     def _update_progress(self, current, total):
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
+        
+        # Force UI update
+        QApplication.processEvents()
     
     def _layer_completed(self, layer_name, stats):
-        if not self.per_layer_checkbox.isChecked():
-            return
-            
+        # Always update the table, but only show it if checkbox is checked
         row = self.layers_table.rowCount()
         self.layers_table.insertRow(row)
         
@@ -448,6 +461,15 @@ class QuantizationAnalyzer(QMainWindow):
         self.layers_table.setItem(row, 2, QTableWidgetItem(f"{stats.max_error:.8f}"))
         self.layers_table.setItem(row, 3, QTableWidgetItem(f"{stats.get_percentile95():.4f}"))
         self.layers_table.setItem(row, 4, QTableWidgetItem(f"{stats.get_median():.4f}"))
+        
+        # Force the UI to update
+        QApplication.processEvents()
+        
+        # Hide the layers tab if not checked
+        if not self.per_layer_checkbox.isChecked():
+            self.results_tabs.setTabVisible(1, False)
+        else:
+            self.results_tabs.setTabVisible(1, True)
     
     def _analysis_completed(self, all_stats):
         self.all_stats = all_stats
