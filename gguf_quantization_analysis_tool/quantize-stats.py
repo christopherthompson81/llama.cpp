@@ -318,15 +318,25 @@ class LlamaAPI:
     
     def _setup_api(self):
         # Define llama_model and llama_context as opaque pointers
-        self.lib.llama_model_load_from_file.restype = c_void_p
-        self.lib.llama_model_load_from_file.argtypes = [c_char_p, c_void_p]
-        
-        self.lib.llama_model_free.argtypes = [c_void_p]
-        
-        self.lib.llama_init_from_model.restype = c_void_p
-        self.lib.llama_init_from_model.argtypes = [c_void_p, c_void_p]
-        
-        self.lib.llama_free.argtypes = [c_void_p]
+        print(f"DEBUG: Setting up function prototypes")
+        try:
+            self.lib.llama_model_load_from_file.restype = c_void_p
+            self.lib.llama_model_load_from_file.argtypes = [c_char_p, c_void_p]
+            print(f"DEBUG: Set up llama_model_load_from_file")
+            
+            self.lib.llama_model_free.argtypes = [c_void_p]
+            print(f"DEBUG: Set up llama_model_free")
+            
+            self.lib.llama_init_from_model.restype = c_void_p
+            self.lib.llama_init_from_model.argtypes = [c_void_p, c_void_p]
+            print(f"DEBUG: Set up llama_init_from_model")
+            
+            self.lib.llama_free.argtypes = [c_void_p]
+            print(f"DEBUG: Set up llama_free")
+        except Exception as e:
+            print(f"DEBUG: EXCEPTION setting up function prototypes: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
         # Define model params structure
         class LlamaModelParams(Structure):
@@ -465,33 +475,74 @@ class LlamaAPI:
         return self.lib.llama_context_default_params()
     
     def load_model(self, model_path):
+        print(f"DEBUG: Starting to load model from {model_path}")
         params = self.model_default_params()
         params.use_mlock = False
         
+        print(f"DEBUG: Created model params, use_mlock={params.use_mlock}")
+        
         # Create a pointer to the params structure
         params_ptr = ctypes.byref(params)
+        print(f"DEBUG: Created params pointer: {params_ptr}")
         
-        model = self.lib.llama_model_load_from_file(model_path.encode('utf-8'), params_ptr)
-        if not model:
-            raise RuntimeError(f"Failed to load model: {model_path}")
-        
-        return model
+        print(f"DEBUG: About to call llama_model_load_from_file")
+        try:
+            model = self.lib.llama_model_load_from_file(model_path.encode('utf-8'), params_ptr)
+            print(f"DEBUG: llama_model_load_from_file returned: {model}")
+            if not model:
+                raise RuntimeError(f"Failed to load model: {model_path}")
+            
+            return model
+        except Exception as e:
+            print(f"DEBUG: EXCEPTION in load_model: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def init_context(self, model):
+        print(f"DEBUG: Starting to initialize context from model {model}")
         params = self.context_default_params()
         params.n_ctx = 256
         
-        ctx = self.lib.llama_init_from_model(model, params)
-        if not ctx:
-            raise RuntimeError("Failed to create context")
+        print(f"DEBUG: Created context params, n_ctx={params.n_ctx}")
         
-        return ctx
+        # Create a pointer to the params structure
+        params_ptr = ctypes.byref(params)
+        print(f"DEBUG: Created context params pointer: {params_ptr}")
+        
+        print(f"DEBUG: About to call llama_init_from_model")
+        try:
+            ctx = self.lib.llama_init_from_model(model, params_ptr)
+            print(f"DEBUG: llama_init_from_model returned: {ctx}")
+            if not ctx:
+                raise RuntimeError("Failed to create context")
+            
+            return ctx
+        except Exception as e:
+            print(f"DEBUG: EXCEPTION in init_context: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     def free_model(self, model):
-        self.lib.llama_model_free(model)
+        print(f"DEBUG: Calling llama_model_free on {model}")
+        try:
+            self.lib.llama_model_free(model)
+            print(f"DEBUG: llama_model_free completed successfully")
+        except Exception as e:
+            print(f"DEBUG: EXCEPTION in free_model: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def free_context(self, ctx):
-        self.lib.llama_free(ctx)
+        print(f"DEBUG: Calling llama_free on {ctx}")
+        try:
+            self.lib.llama_free(ctx)
+            print(f"DEBUG: llama_free completed successfully")
+        except Exception as e:
+            print(f"DEBUG: EXCEPTION in free_context: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def get_tensor_map(self, model):
         # This function is a placeholder since we can't directly access the tensor map
@@ -664,32 +715,55 @@ class LlamaAPI:
         tensors = []
         
         try:
+            print(f"DEBUG: Starting get_tensors with model pointer {model}")
             # Try to use llama_model_n_tensors if available
             if hasattr(self.lib, 'llama_model_n_tensors'):
+                print(f"DEBUG: Found llama_model_n_tensors function")
                 self.lib.llama_model_n_tensors.restype = c_int
                 self.lib.llama_model_n_tensors.argtypes = [c_void_p]
                 
                 self.lib.llama_model_tensor.restype = c_void_p
                 self.lib.llama_model_tensor.argtypes = [c_void_p, c_int]
                 
+                print(f"DEBUG: About to call llama_model_n_tensors")
                 n_tensors = self.lib.llama_model_n_tensors(model)
-                print(f"Model has {n_tensors} tensors")
+                print(f"DEBUG: Model has {n_tensors} tensors")
                 
                 for i in range(n_tensors):
-                    tensor_ptr = self.lib.llama_model_tensor(model, i)
-                    if tensor_ptr:
-                        tensor_name = self.get_tensor_name(tensor_ptr)
-                        tensor_type = self.get_tensor_type(tensor_ptr)
-                        nelements = self.get_nelements(tensor_ptr)
-                        ne = self.get_tensor_dimensions(tensor_ptr)
+                    print(f"DEBUG: Getting tensor {i}/{n_tensors}")
+                    try:
+                        tensor_ptr = self.lib.llama_model_tensor(model, i)
+                        print(f"DEBUG: Got tensor pointer: {tensor_ptr}")
                         
-                        tensors.append({
-                            'name': tensor_name,
-                            'ptr': tensor_ptr,
-                            'type': tensor_type,
-                            'nelements': nelements,
-                            'ne': ne
-                        })
+                        if tensor_ptr:
+                            print(f"DEBUG: Getting tensor name")
+                            tensor_name = self.get_tensor_name(tensor_ptr)
+                            print(f"DEBUG: Tensor name: {tensor_name}")
+                            
+                            print(f"DEBUG: Getting tensor type")
+                            tensor_type = self.get_tensor_type(tensor_ptr)
+                            print(f"DEBUG: Tensor type: {tensor_type}")
+                            
+                            print(f"DEBUG: Getting nelements")
+                            nelements = self.get_nelements(tensor_ptr)
+                            print(f"DEBUG: Tensor nelements: {nelements}")
+                            
+                            print(f"DEBUG: Getting dimensions")
+                            ne = self.get_tensor_dimensions(tensor_ptr)
+                            print(f"DEBUG: Tensor dimensions: {ne}")
+                            
+                            tensors.append({
+                                'name': tensor_name,
+                                'ptr': tensor_ptr,
+                                'type': tensor_type,
+                                'nelements': nelements,
+                                'ne': ne
+                            })
+                            print(f"DEBUG: Added tensor to list")
+                    except Exception as e:
+                        print(f"DEBUG: EXCEPTION processing tensor {i}: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
             else:
                 # If we can't access tensors directly, simulate with random data for testing
                 print("Cannot access model tensors directly. Using simulated data for testing.")
@@ -731,17 +805,28 @@ class QuantizationWorker(QThread):
     
     def run(self):
         try:
+            print(f"DEBUG: QuantizationWorker starting run() with model_path={self.model_path}, lib_path={self.lib_path}")
             results = {}
+            
+            print(f"DEBUG: Initializing LlamaAPI")
             llama_api = LlamaAPI(self.lib_path)
+            print(f"DEBUG: LlamaAPI initialized successfully")
             
             # Load model
             self.progress_updated.emit(0, "Loading model...")
+            print(f"DEBUG: About to load model from {self.model_path}")
             model = llama_api.load_model(self.model_path)
+            print(f"DEBUG: Model loaded successfully, model pointer: {model}")
+            
+            print(f"DEBUG: About to initialize context")
             ctx = llama_api.init_context(model)
+            print(f"DEBUG: Context initialized successfully, ctx pointer: {ctx}")
             
             # Get tensor map
             self.progress_updated.emit(5, "Analyzing tensors...")
+            print(f"DEBUG: About to get tensors from model")
             tensors = llama_api.get_tensors(model)
+            print(f"DEBUG: Got {len(tensors)} tensors from model")
             
             # Filter layers based on include/exclude patterns
             filtered_tensors = []
@@ -820,8 +905,13 @@ class QuantizationWorker(QThread):
                 results[tensor_name] = tensor_results
             
             # Clean up
+            print(f"DEBUG: About to free context {ctx}")
             llama_api.free_context(ctx)
+            print(f"DEBUG: Context freed successfully")
+            
+            print(f"DEBUG: About to free model {model}")
             llama_api.free_model(model)
+            print(f"DEBUG: Model freed successfully")
             
             self.finished.emit(results)
             
