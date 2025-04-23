@@ -329,68 +329,101 @@ class LlamaAPI:
         # Define llama_model and llama_context as opaque pointers
         print(f"DEBUG: Setting up function prototypes")
         try:
+            # Initialize backend first if available
+            if hasattr(self.lib, 'llama_backend_init'):
+                print(f"DEBUG: Setting up llama_backend_init")
+                self.lib.llama_backend_init.argtypes = []
+                self.lib.llama_backend_init.restype = None
+            
+            # Model loading and freeing
             self.lib.llama_model_load_from_file.restype = c_void_p
             self.lib.llama_model_load_from_file.argtypes = [c_char_p, c_void_p]
             print(f"DEBUG: Set up llama_model_load_from_file")
 
             self.lib.llama_model_free.argtypes = [c_void_p]
+            self.lib.llama_model_free.restype = None
             print(f"DEBUG: Set up llama_model_free")
 
+            # Context initialization and freeing
             self.lib.llama_init_from_model.restype = c_void_p
             self.lib.llama_init_from_model.argtypes = [c_void_p, c_void_p]
             print(f"DEBUG: Set up llama_init_from_model")
 
             self.lib.llama_free.argtypes = [c_void_p]
+            self.lib.llama_free.restype = None
             print(f"DEBUG: Set up llama_free")
+            
+            # Default params functions
+            self.lib.llama_model_default_params.restype = LlamaModelParams
+            self.lib.llama_model_default_params.argtypes = []
+            print(f"DEBUG: Set up llama_model_default_params")
+            
+            self.lib.llama_context_default_params.restype = LlamaContextParams
+            self.lib.llama_context_default_params.argtypes = []
+            print(f"DEBUG: Set up llama_context_default_params")
+            
+            # Error reporting
+            if hasattr(self.lib, 'llama_last_error'):
+                self.lib.llama_last_error.restype = c_char_p
+                self.lib.llama_last_error.argtypes = []
+                print(f"DEBUG: Set up llama_last_error")
+                
         except Exception as e:
             print(f"DEBUG: EXCEPTION setting up function prototypes: {str(e)}")
             import traceback
             traceback.print_exc()
 
-        # Define model params structure
+        # Define model params structure - exactly matching llama.h
         class LlamaModelParams(Structure):
             _fields_ = [
-                ("n_gpu_layers", c_int),
-                ("main_gpu", c_int),
-                ("tensor_split", c_float * 8),
-                ("progress_callback", c_void_p),
-                ("progress_callback_user_data", c_void_p),
-                ("vocab_only", c_bool),
-                ("use_mmap", c_bool),
-                ("use_mlock", c_bool),
-                ("split_mode", c_int),
-                ("main_device", c_int),
-                ("devices", POINTER(c_void_p)),
-                ("check_tensors", c_bool),
-                ("kv_overrides", c_void_p),
-                ("tensor_buft_overrides", c_void_p),
+                ("devices", c_void_p),  # NULL-terminated list of devices to use for offloading
+                ("tensor_buft_overrides", c_void_p),  # NULL-terminated list of buffer types to use for tensors
+                ("n_gpu_layers", c_int),  # number of layers to store in VRAM
+                ("split_mode", c_int),  # how to split the model across multiple GPUs
+                ("main_gpu", c_int),  # the GPU that is used for the entire model when split_mode is LLAMA_SPLIT_MODE_NONE
+                ("tensor_split", c_float * 8),  # proportion of the model to offload to each GPU
+                ("progress_callback", c_void_p),  # called with progress value between 0 and 1
+                ("progress_callback_user_data", c_void_p),  # context pointer passed to the progress callback
+                ("kv_overrides", c_void_p),  # override key-value pairs of the model meta data
+                ("vocab_only", c_bool),  # only load the vocabulary, no weights
+                ("use_mmap", c_bool),  # use mmap if possible
+                ("use_mlock", c_bool),  # force system to keep model in RAM
+                ("check_tensors", c_bool),  # validate model tensor data
             ]
 
         self.LlamaModelParams = LlamaModelParams
 
-        # Define context params structure
+        # Define context params structure - exactly matching llama.h
         class LlamaContextParams(Structure):
             _fields_ = [
-                ("n_ctx", c_int),
-                ("n_batch", c_int),
-                ("n_threads", c_int),
-                ("n_threads_batch", c_int),
-                ("rope_scaling_type", c_int),
-                ("rope_freq_base", c_float),
-                ("rope_freq_scale", c_float),
-                ("yarn_ext_factor", c_float),
-                ("yarn_attn_factor", c_float),
-                ("yarn_beta_fast", c_float),
-                ("yarn_beta_slow", c_float),
-                ("yarn_orig_ctx", c_int),
-                ("cb_eval", c_void_p),
-                ("cb_eval_user_data", c_void_p),
-                ("type_k", c_int),
-                ("type_v", c_int),
-                ("logits_all", c_bool),
-                ("embedding", c_bool),
-                ("abort_callback", c_void_p),
-                ("abort_callback_data", c_void_p),
+                ("n_ctx", c_int),  # text context, 0 = from model
+                ("n_batch", c_int),  # logical maximum batch size that can be submitted to llama_decode
+                ("n_ubatch", c_int),  # physical maximum batch size
+                ("n_seq_max", c_int),  # max number of sequences
+                ("n_threads", c_int),  # number of threads to use for generation
+                ("n_threads_batch", c_int),  # number of threads to use for batch processing
+                ("rope_scaling_type", c_int),  # RoPE scaling type
+                ("pooling_type", c_int),  # whether to pool (sum) embedding results by sequence id
+                ("attention_type", c_int),  # attention type to use for embeddings
+                ("rope_freq_base", c_float),  # RoPE base frequency
+                ("rope_freq_scale", c_float),  # RoPE frequency scaling factor
+                ("yarn_ext_factor", c_float),  # YaRN extrapolation mix factor
+                ("yarn_attn_factor", c_float),  # YaRN magnitude scaling factor
+                ("yarn_beta_fast", c_float),  # YaRN low correction dim
+                ("yarn_beta_slow", c_float),  # YaRN high correction dim
+                ("yarn_orig_ctx", c_int),  # YaRN original context size
+                ("defrag_thold", c_float),  # defragment the KV cache if holes/size > thold
+                ("cb_eval", c_void_p),  # callback for evaluating
+                ("cb_eval_user_data", c_void_p),  # user data for cb_eval
+                ("type_k", c_int),  # data type for K cache
+                ("type_v", c_int),  # data type for V cache
+                ("logits_all", c_bool),  # the llama_decode() call computes all logits
+                ("embeddings", c_bool),  # if true, extract embeddings
+                ("offload_kqv", c_bool),  # whether to offload the KQV ops to GPU
+                ("flash_attn", c_bool),  # whether to use flash attention
+                ("no_perf", c_bool),  # whether to measure performance timings
+                ("abort_callback", c_void_p),  # callback for aborting computation
+                ("abort_callback_data", c_void_p),  # user data for abort_callback
             ]
 
         self.LlamaContextParams = LlamaContextParams
