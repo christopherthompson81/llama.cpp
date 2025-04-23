@@ -548,12 +548,6 @@ class QuantizationAnalyzer(QMainWindow):
             self.histogram_text.append("\n")
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="GGUF Quantization Analyzer")
-    parser.add_argument("-m", "--model", type=str, help="Path to GGUF model file")
-    return parser.parse_args()
-
-
     def _init_database(self):
         """Initialize the SQLite database for storing quantization results"""
         try:
@@ -712,6 +706,12 @@ def parse_args():
             conn.close()
         except Exception as e:
             logger.error(f"Error loading existing results: {e}", exc_info=True)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="GGUF Quantization Analyzer")
+    parser.add_argument("-m", "--model", type=str, help="Path to GGUF model file")
+    return parser.parse_args()
 
 
 def main():
