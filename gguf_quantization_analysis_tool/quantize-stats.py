@@ -754,14 +754,23 @@ class QuantizationAnalyzer(QMainWindow):
                     row = self.summary_table.rowCount()
                     self.summary_table.insertRow(row)
                     
-                    self.summary_table.setItem(row, 0, QTableWidgetItem(quant_type))
+                    # Convert values to float if they're not already
+                    try:
+                        rmse = float(rmse)
+                        max_error = float(max_error)
+                        percentile_95 = float(percentile_95)
+                        median = float(median)
+                    except (TypeError, ValueError):
+                        logger.warning(f"Type conversion issue with values: {rmse}, {max_error}, {percentile_95}, {median}")
+                    
+                    self.summary_table.setItem(row, 0, QTableWidgetItem(str(quant_type)))
                     self.summary_table.setItem(row, 1, QTableWidgetItem(f"{rmse:.8f}"))
                     self.summary_table.setItem(row, 2, QTableWidgetItem(f"{max_error:.8f}"))
                     self.summary_table.setItem(row, 3, QTableWidgetItem(f"{percentile_95:.4f}"))
                     self.summary_table.setItem(row, 4, QTableWidgetItem(f"{median:.4f}"))
                 
                 # Set the combo box to the first quantization type found
-                first_quant_type = results[0][0]
+                first_quant_type = str(results[0][0])
                 index = self.quant_combo.findText(first_quant_type)
                 if index >= 0:
                     self.quant_combo.setCurrentIndex(index)
