@@ -375,6 +375,11 @@ class LlamaAPI:
 
         # Define structures and function prototypes
         self._setup_api()
+        
+        # Test basic library functions
+        print("Testing basic library functions...")
+        if not self.test_library_functions():
+            print("WARNING: Some library functions failed to execute properly")
 
     def _setup_api(self):
         # Define model params structure - exactly matching llama.h
@@ -600,6 +605,29 @@ class LlamaAPI:
             print(f"Error checking GGUF file: {str(e)}")
             return False
             
+    def test_library_functions(self):
+        """Test basic library functions to verify the library is working correctly"""
+        try:
+            # Test llama_backend_init
+            if hasattr(self.lib, 'llama_backend_init'):
+                self.lib.llama_backend_init()
+                print("Successfully called llama_backend_init")
+            
+            # Test llama_model_default_params
+            if hasattr(self.lib, 'llama_model_default_params'):
+                params = self.lib.llama_model_default_params()
+                print(f"Successfully called llama_model_default_params: n_gpu_layers={params.n_gpu_layers}")
+            
+            # Test llama_context_default_params
+            if hasattr(self.lib, 'llama_context_default_params'):
+                params = self.lib.llama_context_default_params()
+                print(f"Successfully called llama_context_default_params: n_threads={params.n_threads}")
+            
+            return True
+        except Exception as e:
+            print(f"Error testing library functions: {str(e)}")
+            return False
+
     def load_model(self, model_path):
         global in_critical_section, critical_section_name
         
@@ -623,31 +651,28 @@ class LlamaAPI:
             print(f"DEBUG: Initializing llama backend")
             self.lib.llama_backend_init()
 
-        # Get default parameters
-        params = self.model_default_params()
+        # Get default parameters directly from the library
+        try:
+            params = self.lib.llama_model_default_params()
+            print(f"DEBUG: Got default model params from library")
+        except Exception as e:
+            print(f"DEBUG: Error getting default params: {str(e)}")
+            # Create minimal params structure
+            params = self.LlamaModelParams()
+            params.n_gpu_layers = 0
+            print(f"DEBUG: Created minimal model params")
 
-        # Set conservative parameters to avoid memory issues
-        params.vocab_only = False
-        params.use_mlock = False
-        params.use_mmap = True  # Use memory mapping to reduce memory usage
-        params.n_gpu_layers = 0  # Don't use GPU for analysis
-        params.main_gpu = 0
-        params.tensor_split = (c_float * 8)(0, 0, 0, 0, 0, 0, 0, 0)
-        params.progress_callback = None
-        params.progress_callback_user_data = None
-        params.kv_overrides = None
-        params.tensor_buft_overrides = None
-        params.split_mode = 0  # LLAMA_SPLIT_MODE_NONE
-        params.devices = None
-        params.check_tensors = False
-
-        print(f"DEBUG: Created model params, use_mlock={params.use_mlock}, use_mmap={params.use_mmap}, n_gpu_layers={params.n_gpu_layers}")
+        # Only set essential parameters
+        params.n_gpu_layers = 0
+        params.use_mmap = True
+        
+        print(f"DEBUG: Set model params, n_gpu_layers={params.n_gpu_layers}, use_mmap={params.use_mmap}")
 
         # Create a pointer to the params structure
         params_ptr = ctypes.byref(params)
         print(f"DEBUG: Created params pointer: {params_ptr}")
 
-        # Try to load the model with more detailed error handling
+        # Try to load the model with minimal error handling
         print(f"DEBUG: About to call llama_model_load_from_file")
         try:
             # Ensure the path is properly encoded
@@ -662,29 +687,16 @@ class LlamaAPI:
             in_critical_section = True
             critical_section_name = "llama_model_load_from_file"
             
-            # Load the model with a timeout
-            start_time = time.time()
+            # Load the model
             model = self.lib.llama_model_load_from_file(encoded_path, params_ptr)
-            elapsed_time = time.time() - start_time
             
             # We've exited the critical section
             in_critical_section = False
             
-            print(f"DEBUG: llama_model_load_from_file returned: {model} (took {elapsed_time:.2f} seconds)")
+            print(f"DEBUG: llama_model_load_from_file returned: {model}")
 
             if not model:
-                # Try to get more information about the error
-                error_msg = "Unknown error"
-                if hasattr(self.lib, 'llama_last_error'):
-                    try:
-                        self.lib.llama_last_error.restype = c_char_p
-                        last_error = self.lib.llama_last_error()
-                        if last_error:
-                            error_msg = last_error.decode('utf-8', errors='replace')
-                    except Exception as e2:
-                        error_msg = f"Error getting last error: {str(e2)}"
-                
-                raise RuntimeError(f"Failed to load model: {model_path}. Error: {error_msg}")
+                raise RuntimeError(f"Failed to load model: {model_path}")
 
             return model
         except Exception as e:
@@ -694,54 +706,26 @@ class LlamaAPI:
             print(f"DEBUG: EXCEPTION in load_model: {str(e)}")
             import traceback
             traceback.print_exc()
-
-            # Try to get more information about the error
-            if hasattr(self.lib, 'llama_last_error'):
-                try:
-                    self.lib.llama_last_error.restype = c_char_p
-                    error_msg = self.lib.llama_last_error()
-                    if error_msg:
-                        print(f"DEBUG: llama_last_error: {error_msg.decode('utf-8', errors='replace')}")
-                except:
-                    pass
-
             raise
 
     def init_context(self, model):
         print(f"DEBUG: Starting to initialize context from model {model}")
-        params = self.context_default_params()
+        
+        # Get default parameters directly from the library
+        try:
+            params = self.lib.llama_context_default_params()
+            print(f"DEBUG: Got default context params from library")
+        except Exception as e:
+            print(f"DEBUG: Error getting default context params: {str(e)}")
+            # Create minimal params structure
+            params = self.LlamaContextParams()
+            print(f"DEBUG: Created minimal context params")
 
-        # Set conservative parameters
+        # Set only essential parameters
         params.n_ctx = 128  # Smaller context to reduce memory usage
-        params.n_batch = 512
-        params.n_ubatch = 512
-        params.n_seq_max = 1
         params.n_threads = 1  # Single thread for stability
-        params.n_threads_batch = 1
-        params.rope_scaling_type = -1  # LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED
-        params.pooling_type = -1  # LLAMA_POOLING_TYPE_UNSPECIFIED
-        params.attention_type = -1  # LLAMA_ATTENTION_TYPE_UNSPECIFIED
-        params.rope_freq_base = 0.0
-        params.rope_freq_scale = 0.0
-        params.yarn_ext_factor = -1.0
-        params.yarn_attn_factor = 1.0
-        params.yarn_beta_fast = 32.0
-        params.yarn_beta_slow = 1.0
-        params.yarn_orig_ctx = 0
-        params.defrag_thold = -1.0
-        params.cb_eval = None
-        params.cb_eval_user_data = None
-        params.type_k = 0  # GGML_TYPE_F32
-        params.type_v = 0  # GGML_TYPE_F32
-        params.logits_all = False
-        params.embeddings = False
-        params.offload_kqv = False
-        params.flash_attn = False
-        params.no_perf = True
-        params.abort_callback = None
-        params.abort_callback_data = None
-
-        print(f"DEBUG: Created context params, n_ctx={params.n_ctx}, n_threads={params.n_threads}")
+        
+        print(f"DEBUG: Set context params, n_ctx={params.n_ctx}, n_threads={params.n_threads}")
 
         # Create a pointer to the params structure
         params_ptr = ctypes.byref(params)
@@ -756,18 +740,7 @@ class LlamaAPI:
             ctx = self.lib.llama_init_from_model(model, params_ptr)
             print(f"DEBUG: llama_init_from_model returned: {ctx}")
             if not ctx:
-                # Try to get more information about the error
-                error_msg = "Unknown error"
-                if hasattr(self.lib, 'llama_last_error'):
-                    try:
-                        self.lib.llama_last_error.restype = c_char_p
-                        last_error = self.lib.llama_last_error()
-                        if last_error:
-                            error_msg = last_error.decode('utf-8', errors='replace')
-                    except Exception as e2:
-                        error_msg = f"Error getting last error: {str(e2)}"
-                
-                raise RuntimeError(f"Failed to create context: {error_msg}")
+                raise RuntimeError(f"Failed to create context")
 
             return ctx
         except Exception as e:
@@ -1178,9 +1151,52 @@ class QuantizationWorker(QThread):
             try:
                 print(f"DEBUG: About to load model from {self.model_path}")
                 
-                # Try to load the model, but be prepared for failure
+                # Try to load the model with a timeout
                 try:
-                    model = llama_api.load_model(self.model_path)
+                    # Set a timeout for model loading (30 seconds)
+                    import threading
+                    import _thread
+                    
+                    result = {"model": None, "error": None}
+                    
+                    def load_model_thread():
+                        try:
+                            result["model"] = llama_api.load_model(self.model_path)
+                        except Exception as e:
+                            result["error"] = str(e)
+                    
+                    thread = threading.Thread(target=load_model_thread)
+                    thread.daemon = True
+                    thread.start()
+                    
+                    # Wait for the thread to complete or timeout
+                    thread.join(30)  # 30 second timeout
+                    
+                    if thread.is_alive():
+                        # Thread is still running after timeout
+                        print("Model loading timed out after 30 seconds")
+                        self.progress_updated.emit(0, "Model loading timed out")
+                        
+                        # Try to terminate the thread (this is not safe but we're desperate)
+                        try:
+                            _thread.interrupt_main()
+                        except:
+                            pass
+                        
+                        # Fall back to simulated data
+                        print("Falling back to simulated data mode due to timeout")
+                        self.progress_updated.emit(5, "Using simulated data (loading timed out)")
+                        results = self._run_simulated_analysis()
+                        self.finished.emit(results)
+                        return
+                    
+                    if result["error"]:
+                        raise RuntimeError(result["error"])
+                    
+                    model = result["model"]
+                    if not model:
+                        raise RuntimeError("Model loading failed with unknown error")
+                    
                     print(f"DEBUG: Model loaded successfully, model pointer: {model}")
                 except Exception as e:
                     error_msg = f"Failed to load model: {str(e)}"
