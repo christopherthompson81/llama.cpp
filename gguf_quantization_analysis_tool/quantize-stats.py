@@ -468,7 +468,10 @@ class LlamaAPI:
         params = self.model_default_params()
         params.use_mlock = False
         
-        model = self.lib.llama_model_load_from_file(model_path.encode('utf-8'), params)
+        # Create a pointer to the params structure
+        params_ptr = ctypes.byref(params)
+        
+        model = self.lib.llama_model_load_from_file(model_path.encode('utf-8'), params_ptr)
         if not model:
             raise RuntimeError(f"Failed to load model: {model_path}")
         
