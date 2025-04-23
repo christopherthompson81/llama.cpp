@@ -289,6 +289,7 @@ class LlamaAPI:
     def __init__(self, lib_path=None):
         # Find the library
         lib_paths = []
+        self.lib_path = None  # Store the actual path for debugging
 
         # If a specific path was provided, check there first
         if lib_path:
@@ -296,8 +297,11 @@ class LlamaAPI:
             if os.path.isfile(lib_path):
                 lib_paths.append(lib_path)
             else:
-                # Check for the library in the specified directory
-                lib_paths.append(os.path.join(lib_path, "libllama.so"))
+                # Check for the library in the specified directory with various possible names
+                for lib_name in ["libllama.so", "libllama.dylib", "llama.dll"]:
+                    potential_path = os.path.join(lib_path, lib_name)
+                    if os.path.exists(potential_path):
+                        lib_paths.append(potential_path)
 
         # Add default search paths
         lib_paths.extend([
@@ -312,12 +316,22 @@ class LlamaAPI:
         for path in lib_paths:
             if os.path.exists(path):
                 try:
-                    self.lib = ctypes.CDLL(path)
+                    # First try to load with RTLD_GLOBAL and RTLD_NOW to ensure all symbols are available immediately
+                    self.lib = ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL | ctypes.RTLD_NOW)
+                    self.lib_path = path
                     print(f"Successfully loaded library from: {path}")
                     break
                 except Exception as e:
-                    print(f"Failed to load {path}: {str(e)}")
-                    continue
+                    print(f"Failed to load {path} with RTLD_GLOBAL | RTLD_NOW: {str(e)}")
+                    try:
+                        # Fall back to default loading if that fails
+                        self.lib = ctypes.CDLL(path)
+                        self.lib_path = path
+                        print(f"Successfully loaded library from: {path} with default flags")
+                        break
+                    except Exception as e2:
+                        print(f"Failed to load {path} with default flags: {str(e2)}")
+                        continue
 
         if self.lib is None:
             raise RuntimeError("Could not find libllama.so. Make sure it's in your library path or specify with --lib-path.")
@@ -518,47 +532,138 @@ class LlamaAPI:
 
     def load_model(self, model_path):
         print(f"DEBUG: Starting to load model from {model_path}")
+        
+        # Verify the model file exists
+        if not os.path.isfile(model_path):
+            raise RuntimeError(f"Model file does not exist: {model_path}")
+        
+        # Initialize llama backend first
+        if hasattr(self.lib, 'llama_backend_init'):
+            print(f"DEBUG: Initializing llama backend")
+            self.lib.llama_backend_init()
+        
+        # Get default parameters
         params = self.model_default_params()
+        
+        # Set conservative parameters to avoid memory issues
+        params.vocab_only = False
         params.use_mlock = False
-
-        print(f"DEBUG: Created model params, use_mlock={params.use_mlock}")
-
+        params.use_mmap = True  # Use memory mapping to reduce memory usage
+        params.n_gpu_layers = 0  # Don't use GPU for analysis
+        params.main_gpu = 0
+        params.tensor_split = (c_float * 8)(0, 0, 0, 0, 0, 0, 0, 0)
+        params.progress_callback = None
+        params.progress_callback_user_data = None
+        params.kv_overrides = None
+        params.tensor_buft_overrides = None
+        params.split_mode = 0  # LLAMA_SPLIT_MODE_NONE
+        params.main_device = 0
+        params.devices = None
+        params.check_tensors = False
+        
+        print(f"DEBUG: Created model params, use_mlock={params.use_mlock}, use_mmap={params.use_mmap}, n_gpu_layers={params.n_gpu_layers}")
+        
         # Create a pointer to the params structure
         params_ptr = ctypes.byref(params)
         print(f"DEBUG: Created params pointer: {params_ptr}")
-
+        
+        # Try to load the model with more detailed error handling
         print(f"DEBUG: About to call llama_model_load_from_file")
         try:
-            model = self.lib.llama_model_load_from_file(model_path.encode('utf-8'), params_ptr)
+            # Ensure the path is properly encoded
+            encoded_path = model_path.encode('utf-8')
+            print(f"DEBUG: Encoded path: {encoded_path}")
+            
+            # Set correct return and argument types
+            self.lib.llama_model_load_from_file.restype = c_void_p
+            self.lib.llama_model_load_from_file.argtypes = [c_char_p, c_void_p]
+            
+            # Load the model
+            model = self.lib.llama_model_load_from_file(encoded_path, params_ptr)
             print(f"DEBUG: llama_model_load_from_file returned: {model}")
+            
             if not model:
                 raise RuntimeError(f"Failed to load model: {model_path}")
-
+            
             return model
         except Exception as e:
             print(f"DEBUG: EXCEPTION in load_model: {str(e)}")
             import traceback
             traceback.print_exc()
+            
+            # Try to get more information about the error
+            if hasattr(self.lib, 'llama_last_error'):
+                try:
+                    self.lib.llama_last_error.restype = c_char_p
+                    error_msg = self.lib.llama_last_error()
+                    if error_msg:
+                        print(f"DEBUG: llama_last_error: {error_msg.decode('utf-8', errors='replace')}")
+                except:
+                    pass
+            
             raise
 
     def init_context(self, model):
         print(f"DEBUG: Starting to initialize context from model {model}")
         params = self.context_default_params()
-        params.n_ctx = 256
-
-        print(f"DEBUG: Created context params, n_ctx={params.n_ctx}")
-
+        
+        # Set conservative parameters
+        params.n_ctx = 128  # Smaller context to reduce memory usage
+        params.n_batch = 512
+        params.n_ubatch = 512
+        params.n_seq_max = 1
+        params.n_threads = 1  # Single thread for stability
+        params.n_threads_batch = 1
+        params.rope_scaling_type = -1  # LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED
+        params.pooling_type = -1  # LLAMA_POOLING_TYPE_UNSPECIFIED
+        params.attention_type = -1  # LLAMA_ATTENTION_TYPE_UNSPECIFIED
+        params.rope_freq_base = 0.0
+        params.rope_freq_scale = 0.0
+        params.yarn_ext_factor = -1.0
+        params.yarn_attn_factor = 1.0
+        params.yarn_beta_fast = 32.0
+        params.yarn_beta_slow = 1.0
+        params.yarn_orig_ctx = 0
+        params.defrag_thold = -1.0
+        params.cb_eval = None
+        params.cb_eval_user_data = None
+        params.type_k = 0  # GGML_TYPE_F32
+        params.type_v = 0  # GGML_TYPE_F32
+        params.logits_all = False
+        params.embeddings = False
+        params.offload_kqv = False
+        params.flash_attn = False
+        params.no_perf = True
+        params.abort_callback = None
+        params.abort_callback_data = None
+        
+        print(f"DEBUG: Created context params, n_ctx={params.n_ctx}, n_threads={params.n_threads}")
+        
         # Create a pointer to the params structure
         params_ptr = ctypes.byref(params)
         print(f"DEBUG: Created context params pointer: {params_ptr}")
-
+        
         print(f"DEBUG: About to call llama_init_from_model")
         try:
+            # Set correct return and argument types
+            self.lib.llama_init_from_model.restype = c_void_p
+            self.lib.llama_init_from_model.argtypes = [c_void_p, c_void_p]
+            
             ctx = self.lib.llama_init_from_model(model, params_ptr)
             print(f"DEBUG: llama_init_from_model returned: {ctx}")
             if not ctx:
+                # Try to get more information about the error
+                if hasattr(self.lib, 'llama_last_error'):
+                    try:
+                        self.lib.llama_last_error.restype = c_char_p
+                        error_msg = self.lib.llama_last_error()
+                        if error_msg:
+                            error_str = error_msg.decode('utf-8', errors='replace')
+                            raise RuntimeError(f"Failed to create context: {error_str}")
+                    except:
+                        pass
                 raise RuntimeError("Failed to create context")
-
+            
             return ctx
         except Exception as e:
             print(f"DEBUG: EXCEPTION in init_context: {str(e)}")
