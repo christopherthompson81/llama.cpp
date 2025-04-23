@@ -172,6 +172,15 @@ static void test_roundtrip_on_layer(
     error_stats layer_error {};
     uint64_t nelements = ggml_nelements(layer);
 
+    // Check if the tensor dimensions are compatible with the quantization type
+    int64_t n_per_row = layer->ne[0];
+    if (n_per_row % QK_K != 0) {
+        if (print_layer_stats) {
+            printf("%-50s: SKIPPED (dimension %ld not divisible by %d)\n", name.c_str(), n_per_row, QK_K);
+        }
+        return;
+    }
+
     float* input_scratch_ptr = nullptr;
     if (layer->type == GGML_TYPE_F16) {
         if (input_scratch.size() < nelements) input_scratch.resize(nelements);

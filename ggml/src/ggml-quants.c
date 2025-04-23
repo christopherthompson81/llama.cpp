@@ -1847,6 +1847,12 @@ static void quantize_row_q4_0_impl(const float * GGML_RESTRICT x, block_q4_0 * G
 }
 
 size_t quantize_q4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    // Check if dimensions are compatible with quantization
+    if (n_per_row % QK4_0 != 0) {
+        fprintf(stderr, "Error: quantize_q4_0 requires tensor dimensions divisible by %d (got %ld)\n", QK4_0, n_per_row);
+        return 0;
+    }
+    
     if (!quant_weights) {
         quantize_row_q4_0_ref(src, dst, (int64_t)nrow*n_per_row);
         return nrow * ggml_row_size(GGML_TYPE_Q4_0, n_per_row);
@@ -4720,7 +4726,12 @@ void quantize_row_iq4_nl_ref(const float * GGML_RESTRICT x, block_iq4_nl * GGML_
 }
 
 size_t quantize_iq4_xs(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    GGML_ASSERT(n_per_row%QK_K == 0);
+    // Check if dimensions are compatible with quantization
+    if (n_per_row % QK_K != 0) {
+        fprintf(stderr, "Error: quantize_iq4_xs requires tensor dimensions divisible by %d (got %ld)\n", QK_K, n_per_row);
+        return 0;
+    }
+    
     int64_t nblock = n_per_row/QK_K;
     char * qrow = (char *)dst;
     uint8_t L[QK_K];
