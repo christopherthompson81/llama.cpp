@@ -551,6 +551,11 @@ class QuantizationAnalyzer(QMainWindow):
     def _init_database(self):
         """Initialize the SQLite database for storing quantization results"""
         try:
+            # Delete existing database if it exists to ensure schema is correct
+            if os.path.exists(self.db_path):
+                os.remove(self.db_path)
+                logger.info(f"Removed existing database at {self.db_path}")
+                
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
@@ -622,23 +627,45 @@ class QuantizationAnalyzer(QMainWindow):
                 model_name = os.path.basename(self.model_path)
                 timestamp = datetime.now().isoformat()
                 
-                # Insert or replace global results
-                cursor.execute('''
-                INSERT OR REPLACE INTO quantization_results 
-                (model_path, model_name, quant_type, rmse, max_error, percentile_95, median, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    self.model_path,
-                    model_name,
-                    quant_type.name,
-                    global_stats.get_rmse(),
-                    global_stats.max_error,
-                    global_stats.get_percentile95(),
-                    global_stats.get_median(),
-                    timestamp
-                ))
+                # First check if entry exists
+                cursor.execute(
+                    "SELECT id FROM quantization_results WHERE model_path = ? AND quant_type = ?",
+                    (self.model_path, quant_type.name)
+                )
+                existing = cursor.fetchone()
                 
-                result_id = cursor.lastrowid
+                if existing:
+                    # Update existing entry
+                    cursor.execute('''
+                    UPDATE quantization_results 
+                    SET rmse = ?, max_error = ?, percentile_95 = ?, median = ?, timestamp = ?
+                    WHERE id = ?
+                    ''', (
+                        global_stats.get_rmse(),
+                        global_stats.max_error,
+                        global_stats.get_percentile95(),
+                        global_stats.get_median(),
+                        timestamp,
+                        existing[0]
+                    ))
+                    result_id = existing[0]
+                else:
+                    # Insert new entry
+                    cursor.execute('''
+                    INSERT INTO quantization_results 
+                    (model_path, model_name, quant_type, rmse, max_error, percentile_95, median, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        self.model_path,
+                        model_name,
+                        quant_type.name,
+                        global_stats.get_rmse(),
+                        global_stats.max_error,
+                        global_stats.get_percentile95(),
+                        global_stats.get_median(),
+                        timestamp
+                    ))
+                    result_id = cursor.lastrowid
                 
                 # Delete existing layer results for this analysis
                 cursor.execute("DELETE FROM layer_results WHERE result_id = ?", (result_id,))
