@@ -316,22 +316,14 @@ class LlamaAPI:
         for path in lib_paths:
             if os.path.exists(path):
                 try:
-                    # First try to load with RTLD_GLOBAL and RTLD_NOW to ensure all symbols are available immediately
-                    self.lib = ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL | ctypes.RTLD_NOW)
+                    # Use default loading flags
+                    self.lib = ctypes.CDLL(path)
                     self.lib_path = path
-                    print(f"Successfully loaded library from: {path}")
+                    print(f"Successfully loaded library from: {path} with default flags")
                     break
                 except Exception as e:
-                    print(f"Failed to load {path} with RTLD_GLOBAL | RTLD_NOW: {str(e)}")
-                    try:
-                        # Fall back to default loading if that fails
-                        self.lib = ctypes.CDLL(path)
-                        self.lib_path = path
-                        print(f"Successfully loaded library from: {path} with default flags")
-                        break
-                    except Exception as e2:
-                        print(f"Failed to load {path} with default flags: {str(e2)}")
-                        continue
+                    print(f"Failed to load {path} with default flags: {str(e)}")
+                    continue
 
         if self.lib is None:
             raise RuntimeError("Could not find libllama.so. Make sure it's in your library path or specify with --lib-path.")
@@ -340,53 +332,6 @@ class LlamaAPI:
         self._setup_api()
 
     def _setup_api(self):
-        # Define llama_model and llama_context as opaque pointers
-        print(f"DEBUG: Setting up function prototypes")
-        try:
-            # Initialize backend first if available
-            if hasattr(self.lib, 'llama_backend_init'):
-                print(f"DEBUG: Setting up llama_backend_init")
-                self.lib.llama_backend_init.argtypes = []
-                self.lib.llama_backend_init.restype = None
-
-            # Model loading and freeing
-            self.lib.llama_model_load_from_file.restype = c_void_p
-            self.lib.llama_model_load_from_file.argtypes = [c_char_p, c_void_p]
-            print(f"DEBUG: Set up llama_model_load_from_file")
-
-            self.lib.llama_model_free.argtypes = [c_void_p]
-            self.lib.llama_model_free.restype = None
-            print(f"DEBUG: Set up llama_model_free")
-
-            # Context initialization and freeing
-            self.lib.llama_init_from_model.restype = c_void_p
-            self.lib.llama_init_from_model.argtypes = [c_void_p, c_void_p]
-            print(f"DEBUG: Set up llama_init_from_model")
-
-            self.lib.llama_free.argtypes = [c_void_p]
-            self.lib.llama_free.restype = None
-            print(f"DEBUG: Set up llama_free")
-
-            # Default params functions
-            self.lib.llama_model_default_params.restype = LlamaModelParams
-            self.lib.llama_model_default_params.argtypes = []
-            print(f"DEBUG: Set up llama_model_default_params")
-
-            self.lib.llama_context_default_params.restype = LlamaContextParams
-            self.lib.llama_context_default_params.argtypes = []
-            print(f"DEBUG: Set up llama_context_default_params")
-
-            # Error reporting
-            if hasattr(self.lib, 'llama_last_error'):
-                self.lib.llama_last_error.restype = c_char_p
-                self.lib.llama_last_error.argtypes = []
-                print(f"DEBUG: Set up llama_last_error")
-
-        except Exception as e:
-            print(f"DEBUG: EXCEPTION setting up function prototypes: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
         # Define model params structure - exactly matching llama.h
         class LlamaModelParams(Structure):
             _fields_ = [
@@ -442,9 +387,52 @@ class LlamaAPI:
 
         self.LlamaContextParams = LlamaContextParams
 
-        # Define default params functions
-        self.lib.llama_model_default_params.restype = LlamaModelParams
-        self.lib.llama_context_default_params.restype = LlamaContextParams
+        # Define llama_model and llama_context as opaque pointers
+        print(f"DEBUG: Setting up function prototypes")
+        try:
+            # Initialize backend first if available
+            if hasattr(self.lib, 'llama_backend_init'):
+                print(f"DEBUG: Setting up llama_backend_init")
+                self.lib.llama_backend_init.argtypes = []
+                self.lib.llama_backend_init.restype = None
+
+            # Model loading and freeing
+            self.lib.llama_model_load_from_file.restype = c_void_p
+            self.lib.llama_model_load_from_file.argtypes = [c_char_p, c_void_p]
+            print(f"DEBUG: Set up llama_model_load_from_file")
+
+            self.lib.llama_model_free.argtypes = [c_void_p]
+            self.lib.llama_model_free.restype = None
+            print(f"DEBUG: Set up llama_model_free")
+
+            # Context initialization and freeing
+            self.lib.llama_init_from_model.restype = c_void_p
+            self.lib.llama_init_from_model.argtypes = [c_void_p, c_void_p]
+            print(f"DEBUG: Set up llama_init_from_model")
+
+            self.lib.llama_free.argtypes = [c_void_p]
+            self.lib.llama_free.restype = None
+            print(f"DEBUG: Set up llama_free")
+
+            # Default params functions
+            self.lib.llama_model_default_params.restype = self.LlamaModelParams
+            self.lib.llama_model_default_params.argtypes = []
+            print(f"DEBUG: Set up llama_model_default_params")
+
+            self.lib.llama_context_default_params.restype = self.LlamaContextParams
+            self.lib.llama_context_default_params.argtypes = []
+            print(f"DEBUG: Set up llama_context_default_params")
+
+            # Error reporting
+            if hasattr(self.lib, 'llama_last_error'):
+                self.lib.llama_last_error.restype = c_char_p
+                self.lib.llama_last_error.argtypes = []
+                print(f"DEBUG: Set up llama_last_error")
+
+        except Exception as e:
+            print(f"DEBUG: EXCEPTION setting up function prototypes: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
         # We'll use a different approach to access tensors since llama_internal_get_tensor_map is not available
 
@@ -525,10 +513,35 @@ class LlamaAPI:
         self.TypeTraits = TypeTraits
 
     def model_default_params(self):
-        return self.lib.llama_model_default_params()
+        try:
+            return self.lib.llama_model_default_params()
+        except Exception as e:
+            print(f"Error getting model default params: {str(e)}")
+            # Create a default params structure manually
+            params = self.LlamaModelParams()
+            params.n_gpu_layers = 0
+            params.main_gpu = 0
+            params.tensor_split = (c_float * 8)(0, 0, 0, 0, 0, 0, 0, 0)
+            params.progress_callback = None
+            params.progress_callback_user_data = None
+            params.kv_overrides = None
+            params.vocab_only = False
+            params.use_mmap = True
+            params.use_mlock = False
+            params.check_tensors = False
+            return params
 
     def context_default_params(self):
-        return self.lib.llama_context_default_params()
+        try:
+            return self.lib.llama_context_default_params()
+        except Exception as e:
+            print(f"Error getting context default params: {str(e)}")
+            # Create a default params structure manually
+            params = self.LlamaContextParams()
+            params.n_ctx = 128
+            params.n_batch = 512
+            params.n_threads = 1
+            return params
 
     def load_model(self, model_path):
         print(f"DEBUG: Starting to load model from {model_path}")
@@ -557,7 +570,6 @@ class LlamaAPI:
         params.kv_overrides = None
         params.tensor_buft_overrides = None
         params.split_mode = 0  # LLAMA_SPLIT_MODE_NONE
-        params.main_device = 0
         params.devices = None
         params.check_tensors = False
 
