@@ -7,13 +7,9 @@ import sqlite3
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
-from pathlib import Path
-from typing import List, Dict, Tuple, Optional, Set, Any
 import ctypes
-from ctypes import c_void_p, c_int, c_float, c_char_p, c_bool, POINTER, Structure, c_int64, c_uint64, c_size_t
-from enum import Enum, auto
-import threading
-import queue
+from ctypes import c_void_p, c_int, c_float, c_char_p, c_bool, POINTER, Structure, c_int64, c_size_t
+from enum import Enum
 import signal
 import resource
 import time
@@ -21,12 +17,12 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QLabel, QPushButton, QFileDialog, QComboBox, QCheckBox,
                                QTableWidget, QTableWidgetItem, QTabWidget, QProgressBar,
                                QLineEdit, QGroupBox, QGridLayout, QSplitter, QMessageBox)
-from PySide6.QtCore import Qt, Signal, Slot, QThread
-from PySide6.QtGui import QFont, QColor
+from PySide6.QtCore import Qt, Signal, QThread
 
 # Global variable to track if we're in a critical section
 in_critical_section = False
 critical_section_name = ""
+
 
 def signal_handler(sig, frame):
     """Handle signals like SIGSEGV (segmentation fault)"""
@@ -37,23 +33,24 @@ def signal_handler(sig, frame):
         signal.SIGILL: "SIGILL (Illegal Instruction)",
         signal.SIGFPE: "SIGFPE (Floating Point Exception)"
     }
-    
+
     signal_name = signal_names.get(sig, f"Signal {sig}")
-    
+
     error_msg = f"Caught {signal_name}"
     if in_critical_section:
         error_msg += f" during {critical_section_name}"
-    
+
     print(f"ERROR: {error_msg}")
-    
+
     # Write to a log file
     with open("crash_log.txt", "a") as f:
         f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {error_msg}\n")
         if hasattr(frame, 'f_code'):
             f.write(f"  File: {frame.f_code.co_filename}, Line: {frame.f_lineno}\n")
-    
+
     # Don't exit - let the exception propagate so it can be caught
     # This allows the application to continue running
+
 
 # Register signal handlers
 signal.signal(signal.SIGSEGV, signal_handler)
@@ -375,7 +372,7 @@ class LlamaAPI:
 
         # Define structures and function prototypes
         self._setup_api()
-        
+
         # Test basic library functions
         print("Testing basic library functions...")
         if not self.test_library_functions():
@@ -438,46 +435,46 @@ class LlamaAPI:
         self.LlamaContextParams = LlamaContextParams
 
         # Define llama_model and llama_context as opaque pointers
-        print(f"DEBUG: Setting up function prototypes")
+        print("DEBUG: Setting up function prototypes")
         try:
             # Initialize backend first if available
             if hasattr(self.lib, 'llama_backend_init'):
-                print(f"DEBUG: Setting up llama_backend_init")
+                print("DEBUG: Setting up llama_backend_init")
                 self.lib.llama_backend_init.argtypes = []
                 self.lib.llama_backend_init.restype = None
 
             # Model loading and freeing
             self.lib.llama_model_load_from_file.restype = c_void_p
             self.lib.llama_model_load_from_file.argtypes = [c_char_p, c_void_p]
-            print(f"DEBUG: Set up llama_model_load_from_file")
+            print("DEBUG: Set up llama_model_load_from_file")
 
             self.lib.llama_model_free.argtypes = [c_void_p]
             self.lib.llama_model_free.restype = None
-            print(f"DEBUG: Set up llama_model_free")
+            print("DEBUG: Set up llama_model_free")
 
             # Context initialization and freeing
             self.lib.llama_init_from_model.restype = c_void_p
             self.lib.llama_init_from_model.argtypes = [c_void_p, c_void_p]
-            print(f"DEBUG: Set up llama_init_from_model")
+            print("DEBUG: Set up llama_init_from_model")
 
             self.lib.llama_free.argtypes = [c_void_p]
             self.lib.llama_free.restype = None
-            print(f"DEBUG: Set up llama_free")
+            print("DEBUG: Set up llama_free")
 
             # Default params functions
             self.lib.llama_model_default_params.restype = self.LlamaModelParams
             self.lib.llama_model_default_params.argtypes = []
-            print(f"DEBUG: Set up llama_model_default_params")
+            print("DEBUG: Set up llama_model_default_params")
 
             self.lib.llama_context_default_params.restype = self.LlamaContextParams
             self.lib.llama_context_default_params.argtypes = []
-            print(f"DEBUG: Set up llama_context_default_params")
+            print("DEBUG: Set up llama_context_default_params")
 
             # Error reporting
             if hasattr(self.lib, 'llama_last_error'):
                 self.lib.llama_last_error.restype = c_char_p
                 self.lib.llama_last_error.argtypes = []
-                print(f"DEBUG: Set up llama_last_error")
+                print("DEBUG: Set up llama_last_error")
 
         except Exception as e:
             print(f"DEBUG: EXCEPTION setting up function prototypes: {str(e)}")
@@ -604,7 +601,7 @@ class LlamaAPI:
         except Exception as e:
             print(f"Error checking GGUF file: {str(e)}")
             return False
-            
+
     def test_library_functions(self):
         """Test basic library functions to verify the library is working correctly"""
         try:
@@ -612,17 +609,17 @@ class LlamaAPI:
             if hasattr(self.lib, 'llama_backend_init'):
                 self.lib.llama_backend_init()
                 print("Successfully called llama_backend_init")
-            
+
             # Test llama_model_default_params
             if hasattr(self.lib, 'llama_model_default_params'):
                 params = self.lib.llama_model_default_params()
                 print(f"Successfully called llama_model_default_params: n_gpu_layers={params.n_gpu_layers}")
-            
+
             # Test llama_context_default_params
             if hasattr(self.lib, 'llama_context_default_params'):
                 params = self.lib.llama_context_default_params()
                 print(f"Successfully called llama_context_default_params: n_threads={params.n_threads}")
-            
+
             return True
         except Exception as e:
             print(f"Error testing library functions: {str(e)}")
@@ -630,42 +627,42 @@ class LlamaAPI:
 
     def load_model(self, model_path):
         global in_critical_section, critical_section_name
-        
+
         print(f"DEBUG: Starting to load model from {model_path}")
 
         # Verify the model file exists
         if not os.path.isfile(model_path):
             raise RuntimeError(f"Model file does not exist: {model_path}")
-        
+
         # Check if the file is a valid GGUF file
         try:
             with open(model_path, 'rb') as f:
                 magic = f.read(4)
                 if magic != b'GGUF':
-                    print(f"WARNING: File does not start with GGUF magic number. This may not be a valid GGUF file.")
+                    print("WARNING: File does not start with GGUF magic number. This may not be a valid GGUF file.")
         except Exception as e:
             print(f"WARNING: Could not check GGUF magic number: {str(e)}")
 
         # Initialize llama backend first
         if hasattr(self.lib, 'llama_backend_init'):
-            print(f"DEBUG: Initializing llama backend")
+            print("DEBUG: Initializing llama backend")
             self.lib.llama_backend_init()
 
         # Get default parameters directly from the library
         try:
             params = self.lib.llama_model_default_params()
-            print(f"DEBUG: Got default model params from library")
+            print("DEBUG: Got default model params from library")
         except Exception as e:
             print(f"DEBUG: Error getting default params: {str(e)}")
             # Create minimal params structure
             params = self.LlamaModelParams()
             params.n_gpu_layers = 0
-            print(f"DEBUG: Created minimal model params")
+            print("DEBUG: Created minimal model params")
 
         # Only set essential parameters
         params.n_gpu_layers = 0
         params.use_mmap = True
-        
+
         print(f"DEBUG: Set model params, n_gpu_layers={params.n_gpu_layers}, use_mmap={params.use_mmap}")
 
         # Create a pointer to the params structure
@@ -673,7 +670,7 @@ class LlamaAPI:
         print(f"DEBUG: Created params pointer: {params_ptr}")
 
         # Try to load the model with minimal error handling
-        print(f"DEBUG: About to call llama_model_load_from_file")
+        print("DEBUG: About to call llama_model_load_from_file")
         try:
             # Ensure the path is properly encoded
             encoded_path = model_path.encode('utf-8')
@@ -686,13 +683,13 @@ class LlamaAPI:
             # Mark that we're entering a critical section
             in_critical_section = True
             critical_section_name = "llama_model_load_from_file"
-            
+
             # Load the model
             model = self.lib.llama_model_load_from_file(encoded_path, params_ptr)
-            
+
             # We've exited the critical section
             in_critical_section = False
-            
+
             print(f"DEBUG: llama_model_load_from_file returned: {model}")
 
             if not model:
@@ -702,7 +699,7 @@ class LlamaAPI:
         except Exception as e:
             # We've exited the critical section
             in_critical_section = False
-            
+
             print(f"DEBUG: EXCEPTION in load_model: {str(e)}")
             import traceback
             traceback.print_exc()
@@ -710,28 +707,28 @@ class LlamaAPI:
 
     def init_context(self, model):
         print(f"DEBUG: Starting to initialize context from model {model}")
-        
+
         # Get default parameters directly from the library
         try:
             params = self.lib.llama_context_default_params()
-            print(f"DEBUG: Got default context params from library")
+            print("DEBUG: Got default context params from library")
         except Exception as e:
             print(f"DEBUG: Error getting default context params: {str(e)}")
             # Create minimal params structure
             params = self.LlamaContextParams()
-            print(f"DEBUG: Created minimal context params")
+            print("DEBUG: Created minimal context params")
 
         # Set only essential parameters
         params.n_ctx = 128  # Smaller context to reduce memory usage
         params.n_threads = 1  # Single thread for stability
-        
+
         print(f"DEBUG: Set context params, n_ctx={params.n_ctx}, n_threads={params.n_threads}")
 
         # Create a pointer to the params structure
         params_ptr = ctypes.byref(params)
         print(f"DEBUG: Created context params pointer: {params_ptr}")
 
-        print(f"DEBUG: About to call llama_init_from_model")
+        print("DEBUG: About to call llama_init_from_model")
         try:
             # Set correct return and argument types
             self.lib.llama_init_from_model.restype = c_void_p
@@ -740,7 +737,7 @@ class LlamaAPI:
             ctx = self.lib.llama_init_from_model(model, params_ptr)
             print(f"DEBUG: llama_init_from_model returned: {ctx}")
             if not ctx:
-                raise RuntimeError(f"Failed to create context")
+                raise RuntimeError("Failed to create context")
 
             return ctx
         except Exception as e:
@@ -753,7 +750,7 @@ class LlamaAPI:
         print(f"DEBUG: Calling llama_model_free on {model}")
         try:
             self.lib.llama_model_free(model)
-            print(f"DEBUG: llama_model_free completed successfully")
+            print("DEBUG: llama_model_free completed successfully")
         except Exception as e:
             print(f"DEBUG: EXCEPTION in free_model: {str(e)}")
             import traceback
@@ -763,7 +760,7 @@ class LlamaAPI:
         print(f"DEBUG: Calling llama_free on {ctx}")
         try:
             self.lib.llama_free(ctx)
-            print(f"DEBUG: llama_free completed successfully")
+            print("DEBUG: llama_free completed successfully")
         except Exception as e:
             print(f"DEBUG: EXCEPTION in free_context: {str(e)}")
             import traceback
@@ -898,10 +895,12 @@ class LlamaAPI:
                 # Allocate memory for output data
                 output_data = (ctypes.c_float * nelements)()
 
+                print(traits, quantized_data, output_data)
+
                 # For now, we'll use the simulation since we don't have direct access to quantize functions
                 return self._simulate_quantization(input_data, quant_type)
             else:
-                print(f"Required quantization functions not available, using simulation")
+                print("Required quantization functions not available, using simulation")
                 return self._simulate_quantization(input_data, quant_type)
         except Exception as e:
             print(f"Error in quantize_tensor: {str(e)}")
@@ -943,14 +942,14 @@ class LlamaAPI:
             print(f"DEBUG: Starting get_tensors with model pointer {model}")
             # Try to use llama_model_n_tensors if available
             if hasattr(self.lib, 'llama_model_n_tensors'):
-                print(f"DEBUG: Found llama_model_n_tensors function")
+                print("DEBUG: Found llama_model_n_tensors function")
                 self.lib.llama_model_n_tensors.restype = c_int
                 self.lib.llama_model_n_tensors.argtypes = [c_void_p]
 
                 self.lib.llama_model_tensor.restype = c_void_p
                 self.lib.llama_model_tensor.argtypes = [c_void_p, c_int]
 
-                print(f"DEBUG: About to call llama_model_n_tensors")
+                print("DEBUG: About to call llama_model_n_tensors")
                 try:
                     n_tensors = self.lib.llama_model_n_tensors(model)
                     print(f"DEBUG: Model has {n_tensors} tensors")
@@ -966,19 +965,19 @@ class LlamaAPI:
                         print(f"DEBUG: Got tensor pointer: {tensor_ptr}")
 
                         if tensor_ptr:
-                            print(f"DEBUG: Getting tensor name")
+                            print("DEBUG: Getting tensor name")
                             tensor_name = self.get_tensor_name(tensor_ptr)
                             print(f"DEBUG: Tensor name: {tensor_name}")
 
-                            print(f"DEBUG: Getting tensor type")
+                            print("DEBUG: Getting tensor type")
                             tensor_type = self.get_tensor_type(tensor_ptr)
                             print(f"DEBUG: Tensor type: {tensor_type}")
 
-                            print(f"DEBUG: Getting nelements")
+                            print("DEBUG: Getting nelements")
                             nelements = self.get_nelements(tensor_ptr)
                             print(f"DEBUG: Tensor nelements: {nelements}")
 
-                            print(f"DEBUG: Getting dimensions")
+                            print("DEBUG: Getting dimensions")
                             ne = self.get_tensor_dimensions(tensor_ptr)
                             print(f"DEBUG: Tensor dimensions: {ne}")
 
@@ -989,7 +988,7 @@ class LlamaAPI:
                                 'nelements': nelements,
                                 'ne': ne
                             })
-                            print(f"DEBUG: Added tensor to list")
+                            print("DEBUG: Added tensor to list")
                     except Exception as e:
                         print(f"DEBUG: EXCEPTION processing tensor {i}: {str(e)}")
                         import traceback
@@ -1009,7 +1008,7 @@ class LlamaAPI:
             return self._get_simulated_tensors()
 
         return tensors
-        
+
     def _get_simulated_tensors(self):
         """Generate simulated tensor data for testing"""
         tensors = []
@@ -1042,13 +1041,13 @@ class QuantizationWorker(QThread):
     def _run_simulated_analysis(self):
         """Run a simulated analysis when model loading fails"""
         results = {}
-        
+
         # Create some simulated layers
         layer_names = [
-            "token_embd.weight", 
-            "blk.0.attn_q.weight", 
+            "token_embd.weight",
+            "blk.0.attn_q.weight",
             "blk.0.attn_k.weight",
-            "blk.0.attn_v.weight", 
+            "blk.0.attn_v.weight",
             "blk.0.attn_output.weight",
             "blk.0.ffn_gate.weight",
             "blk.0.ffn_up.weight",
@@ -1056,39 +1055,39 @@ class QuantizationWorker(QThread):
             "blk.1.attn_q.weight",
             "blk.1.attn_k.weight"
         ]
-        
+
         # Filter layers based on include/exclude patterns
         filtered_layers = []
         for name in layer_names:
             if self.layer_included(name):
                 filtered_layers.append(name)
-        
+
         total_layers = len(filtered_layers)
         total_types = len(self.quant_types)
         total_steps = total_layers * total_types
         current_step = 0
-        
+
         # Process each simulated layer
         for layer_name in filtered_layers:
             if self.stop_requested:
                 break
-                
+
             # Create simulated tensor data
             tensor_data = np.random.randn(1024 * 1024).astype(np.float32)
             tensor_results = {}
-            
+
             # Process each quantization type
             for quant_type in self.quant_types:
                 if self.stop_requested:
                     break
-                    
+
                 current_step += 1
                 progress_pct = int(100 * current_step / total_steps)
                 self.progress_updated.emit(
                     progress_pct,
                     f"Simulating {layer_name} with {quant_type.name} ({current_step}/{total_steps})"
                 )
-                
+
                 # Simulate quantization with different error levels based on type
                 noise_level = 0.0
                 if quant_type == GGMLType.GGML_TYPE_Q4_0:
@@ -1107,19 +1106,19 @@ class QuantizationWorker(QThread):
                     noise_level = 0.025
                 elif quant_type == GGMLType.GGML_TYPE_Q6_K:
                     noise_level = 0.0125
-                    
+
                 # Add noise to simulate quantization
                 quantized_data = tensor_data + np.random.normal(0, noise_level, size=len(tensor_data))
-                
+
                 # Calculate error statistics
                 stats = ErrorStats()
                 stats.update(tensor_data, quantized_data)
-                
+
                 # Store results
                 tensor_results[quant_type] = stats
-                
+
             results[layer_name] = tensor_results
-            
+
         return results
 
     def run(self):
@@ -1135,10 +1134,10 @@ class QuantizationWorker(QThread):
                 self.finished.emit({})
                 return
 
-            print(f"DEBUG: Initializing LlamaAPI")
+            print("DEBUG: Initializing LlamaAPI")
             try:
                 llama_api = LlamaAPI(self.lib_path)
-                print(f"DEBUG: LlamaAPI initialized successfully")
+                print("DEBUG: LlamaAPI initialized successfully")
             except Exception as e:
                 error_msg = f"Failed to initialize LlamaAPI: {str(e)}"
                 print(f"ERROR: {error_msg}")
@@ -1150,63 +1149,63 @@ class QuantizationWorker(QThread):
             self.progress_updated.emit(0, "Loading model...")
             try:
                 print(f"DEBUG: About to load model from {self.model_path}")
-                
+
                 # Try to load the model with a timeout
                 try:
                     # Set a timeout for model loading (30 seconds)
                     import threading
                     import _thread
-                    
+
                     result = {"model": None, "error": None}
-                    
+
                     def load_model_thread():
                         try:
                             result["model"] = llama_api.load_model(self.model_path)
                         except Exception as e:
                             result["error"] = str(e)
-                    
+
                     thread = threading.Thread(target=load_model_thread)
                     thread.daemon = True
                     thread.start()
-                    
+
                     # Wait for the thread to complete or timeout
                     thread.join(30)  # 30 second timeout
-                    
+
                     if thread.is_alive():
                         # Thread is still running after timeout
                         print("Model loading timed out after 30 seconds")
                         self.progress_updated.emit(0, "Model loading timed out")
-                        
+
                         # Try to terminate the thread (this is not safe but we're desperate)
                         try:
                             _thread.interrupt_main()
-                        except:
+                        except Exception:
                             pass
-                        
+
                         # Fall back to simulated data
                         print("Falling back to simulated data mode due to timeout")
                         self.progress_updated.emit(5, "Using simulated data (loading timed out)")
                         results = self._run_simulated_analysis()
                         self.finished.emit(results)
                         return
-                    
+
                     if result["error"]:
                         raise RuntimeError(result["error"])
-                    
+
                     model = result["model"]
                     if not model:
                         raise RuntimeError("Model loading failed with unknown error")
-                    
+
                     print(f"DEBUG: Model loaded successfully, model pointer: {model}")
                 except Exception as e:
                     error_msg = f"Failed to load model: {str(e)}"
                     print(f"ERROR: {error_msg}")
                     self.progress_updated.emit(0, f"Error: {error_msg}")
-                    
+
                     # Instead of failing completely, use simulated data
                     print("Falling back to simulated data mode")
                     self.progress_updated.emit(5, "Using simulated data (model loading failed)")
-                    
+
                     # Create a simulated analysis
                     results = self._run_simulated_analysis()
                     self.finished.emit(results)
@@ -1220,7 +1219,7 @@ class QuantizationWorker(QThread):
 
             # Initialize context
             try:
-                print(f"DEBUG: About to initialize context")
+                print("DEBUG: About to initialize context")
                 ctx = llama_api.init_context(model)
                 print(f"DEBUG: Context initialized successfully, ctx pointer: {ctx}")
             except Exception as e:
@@ -1230,7 +1229,7 @@ class QuantizationWorker(QThread):
                 # Clean up model
                 try:
                     llama_api.free_model(model)
-                except:
+                except Exception:
                     pass
                 self.finished.emit({})
                 return
@@ -1238,7 +1237,7 @@ class QuantizationWorker(QThread):
             # Get tensor map
             self.progress_updated.emit(5, "Analyzing tensors...")
             try:
-                print(f"DEBUG: About to get tensors from model")
+                print("DEBUG: About to get tensors from model")
                 tensors = llama_api.get_tensors(model)
                 print(f"DEBUG: Got {len(tensors)} tensors from model")
             except Exception as e:
@@ -1249,7 +1248,7 @@ class QuantizationWorker(QThread):
                 try:
                     llama_api.free_context(ctx)
                     llama_api.free_model(model)
-                except:
+                except Exception:
                     pass
                 self.finished.emit({})
                 return
@@ -1315,7 +1314,7 @@ class QuantizationWorker(QThread):
                     progress_pct = int(100 * current_step / total_steps)
                     self.progress_updated.emit(
                         progress_pct,
-                        f"Processing {tensor_name} with {quant_type.name} ({current_step}/{total_steps})"
+                        f"Processing {tensor_name} with {quant_type.name} of type {tensor_type} ({current_step}/{total_steps})"
                     )
 
                     # Quantize tensor
@@ -1334,11 +1333,11 @@ class QuantizationWorker(QThread):
             try:
                 print(f"DEBUG: About to free context {ctx}")
                 llama_api.free_context(ctx)
-                print(f"DEBUG: Context freed successfully")
+                print("DEBUG: Context freed successfully")
 
                 print(f"DEBUG: About to free model {model}")
                 llama_api.free_model(model)
-                print(f"DEBUG: Model freed successfully")
+                print("DEBUG: Model freed successfully")
             except Exception as e:
                 print(f"WARNING: Error during cleanup: {str(e)}")
 
@@ -1829,7 +1828,7 @@ def main():
         try:
             # Initialize the API with the specified library path
             llama_api = LlamaAPI(args.lib_path)
-            print(f"Successfully initialized LlamaAPI")
+            print("Successfully initialized LlamaAPI", llama_api)
 
             # Here would be the implementation of the command-line functionality
             # ...
