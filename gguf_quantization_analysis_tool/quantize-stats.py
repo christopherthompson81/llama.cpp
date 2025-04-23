@@ -1195,6 +1195,12 @@ class QuantizationWorker(QThread):
                     results = self._run_simulated_analysis()
                     self.finished.emit(results)
                     return
+            except Exception as e:
+                error_msg = f"Unexpected error during model loading: {str(e)}"
+                print(f"ERROR: {error_msg}")
+                self.progress_updated.emit(0, f"Error: {error_msg}")
+                self.finished.emit({})
+                return
 
             # Initialize context
             try:
