@@ -14,6 +14,7 @@ private:
     llama_batch batch;
     bool owns_batch;
     int32_t n_seq_max; // Store the max sequences per token
+    int32_t embd;      // Store the embedding dimension size
 
 public:
     /**
