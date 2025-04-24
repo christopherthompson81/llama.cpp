@@ -20,7 +20,7 @@ class LlamaBatch:
     @property
     def tokens(self) -> np.ndarray:
         """Get the token IDs in the batch."""
-        return self._batch.get_tokens()
+        return self._batch.tokens
     
     @tokens.setter
     def tokens(self, value: Union[List[int], np.ndarray]) -> None:
@@ -31,12 +31,13 @@ class LlamaBatch:
             value: Array of token IDs
         """
         tokens_array = np.array(value, dtype=np.int32)
-        self._batch.set_tokens(tokens_array)
+        # Use the correct method name from the C++ binding
+        self._batch.tokens = tokens_array
     
     @property
     def positions(self) -> np.ndarray:
         """Get the positions in the batch."""
-        return self._batch.get_positions()
+        return self._batch.positions
     
     @positions.setter
     def positions(self, value: Union[List[int], np.ndarray]) -> None:
@@ -46,12 +47,12 @@ class LlamaBatch:
         Args:
             value: Array of positions
         """
-        self._batch.set_positions(np.array(value, dtype=np.int32))
+        self._batch.positions = np.array(value, dtype=np.int32)
     
     @property
     def n_seq_id(self) -> np.ndarray:
         """Get the sequence IDs in the batch."""
-        return self._batch.get_n_seq_id()
+        return self._batch.n_seq_id
     
     @n_seq_id.setter
     def n_seq_id(self, value: Union[List[int], np.ndarray]) -> None:
@@ -61,12 +62,12 @@ class LlamaBatch:
         Args:
             value: Array of sequence IDs
         """
-        self._batch.set_n_seq_id(np.array(value, dtype=np.int32))
+        self._batch.n_seq_id = np.array(value, dtype=np.int32)
     
     @property
     def logits(self) -> np.ndarray:
         """Get the logits flags in the batch."""
-        return self._batch.get_logits()
+        return self._batch.logits
     
     @logits.setter
     def logits(self, value: Union[List[int], np.ndarray]) -> None:
@@ -76,4 +77,4 @@ class LlamaBatch:
         Args:
             value: Array of logits flags (0 or 1)
         """
-        self._batch.set_logits(np.array(value, dtype=np.int8))
+        self._batch.logits = np.array(value, dtype=np.int8)
