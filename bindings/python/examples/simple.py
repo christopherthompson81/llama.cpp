@@ -51,22 +51,37 @@ def main():
     tokens = model.tokenize(args.prompt)
     n_prompt_tokens = len(tokens)
 
+    # Create a batch for processing
+    # Use n_batch from context if available, otherwise default (e.g., 512)
+    # n_batch = context.n_batch if hasattr(context, 'n_batch') else 512 # Check LlamaContext API
+    n_batch = 512 # Assuming default batch size if not directly accessible
+    batch = model.create_batch(n_batch)
+    
     print(f"Evaluating prompt...")
     output_tokens = []
-    # Process the prompt tokens one by one
-    for token in tokens:
-        batch = model.create_batch(1)
-        batch.tokens = [token]
-        context.decode(batch)
-        output_tokens.append(token)
+    batch.n_tokens = 0 # Ensure batch is clear initially
+
+    # Add prompt tokens to the batch
+    for i, token in enumerate(tokens):
+        # batch.add_sequence([token], seq_id=0, pos=i) # Preferred way if available
+        # Manual population if add_sequence is not available/suitable:
+        batch._batch.token[batch.n_tokens] = token
+        batch._batch.pos[batch.n_tokens] = i
+        batch._batch.n_seq_id[batch.n_tokens] = 1
+        batch._batch.seq_id[batch.n_tokens][0] = 0 # Sequence ID 0
+        batch._batch.logits[batch.n_tokens] = 0 # Logits are ignored for input
+        batch.n_tokens += 1
+        output_tokens.append(token) # Keep track of all tokens
+
+    # Decode the prompt batch
+    context.decode(batch)
 
     print(f"Generating {args.max_tokens} tokens...")
-    
-    # Get logits for the next token after processing the prompt
-    logits = context.get_logits()
 
     # Generation loop
     for i in range(args.max_tokens):
+        # Get logits for the *last* token position processed
+        logits = context.get_logits_for_token(batch.n_tokens - 1)
         # Sample the next token
         next_token = sample_token(
             logits,
@@ -82,15 +97,22 @@ def main():
         if next_token == model.vocab.eos_token:
             break
 
-        # Prepare the batch for the next token
-        batch = model.create_batch(1)
-        batch.tokens = [next_token]
+        # Prepare the batch for the *next* token
+        batch.n_tokens = 0 # Clear the batch for the next token
+        current_pos = n_prompt_tokens + i # Position of the token we are about to decode
+
+        # Add the single next token to the batch
+        # batch.add_sequence([next_token], seq_id=0, pos=current_pos) # Preferred way
+        # Manual population:
+        batch._batch.token[batch.n_tokens] = next_token
+        batch._batch.pos[batch.n_tokens] = current_pos
+        batch._batch.n_seq_id[batch.n_tokens] = 1
+        batch._batch.seq_id[batch.n_tokens][0] = 0 # Sequence ID 0
+        batch._batch.logits[batch.n_tokens] = 1 # Enable logits for this token
+        batch.n_tokens += 1
 
         # Decode the single-token batch to update the context
         context.decode(batch)
-
-        # Get logits for the *next* token
-        logits = context.get_logits()
 
     # Detokenize only the generated part
     # Convert list to numpy array for slicing if needed, or detokenize directly
