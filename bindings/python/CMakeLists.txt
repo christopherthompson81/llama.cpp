@@ -1,23 +1,38 @@
-# Find Python interpreter
-find_package(Python COMPONENTS Interpreter REQUIRED)
+# Use the conda Python instead of system Python
+find_program(CONDA_PYTHON_EXECUTABLE "python" PATHS "$ENV{HOME}/miniconda3/bin" NO_DEFAULT_PATH)
+
+if(NOT CONDA_PYTHON_EXECUTABLE)
+    # Fall back to system Python if conda Python not found
+    find_package(Python COMPONENTS Interpreter REQUIRED)
+    set(CONDA_PYTHON_EXECUTABLE ${Python_EXECUTABLE})
+endif()
+
+message(STATUS "Using Python: ${CONDA_PYTHON_EXECUTABLE}")
 
 # Get Python include directories directly from the interpreter
 execute_process(
-    COMMAND "${Python_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_path('include'))"
+    COMMAND "${CONDA_PYTHON_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_path('include'))"
     OUTPUT_VARIABLE PYTHON_INCLUDE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+# Get Python platinclude directory (architecture-specific headers)
+execute_process(
+    COMMAND "${CONDA_PYTHON_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_path('platinclude'))"
+    OUTPUT_VARIABLE PYTHON_PLATINCLUDE_DIR
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
 # Get Python library directory
 execute_process(
-    COMMAND "${Python_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))"
+    COMMAND "${CONDA_PYTHON_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))"
     OUTPUT_VARIABLE PYTHON_LIBRARY_DIR
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
 # Get Python extension suffix
 execute_process(
-    COMMAND "${Python_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"
+    COMMAND "${CONDA_PYTHON_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"
     OUTPUT_VARIABLE PYTHON_MODULE_EXTENSION
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
@@ -31,6 +46,7 @@ endif()
 set(PYTHON_MODULE_PREFIX "")
 
 message(STATUS "Python include directory: ${PYTHON_INCLUDE_DIR}")
+message(STATUS "Python platinclude directory: ${PYTHON_PLATINCLUDE_DIR}")
 message(STATUS "Python library directory: ${PYTHON_LIBRARY_DIR}")
 message(STATUS "Python module extension: ${PYTHON_MODULE_EXTENSION}")
 
@@ -55,6 +71,7 @@ target_link_libraries(llama_cpp PRIVATE llama)
 target_include_directories(llama_cpp PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     ${PYTHON_INCLUDE_DIR}
+    ${PYTHON_PLATINCLUDE_DIR}
     ${pybind11_INCLUDE_DIRS}
 )
 
