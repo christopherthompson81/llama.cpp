@@ -65,11 +65,11 @@ def main():
     for i, token in enumerate(tokens):
         # batch.add_sequence([token], seq_id=0, pos=i) # Preferred way if available
         # Manual population if add_sequence is not available/suitable:
-        batch._batch.token[batch.n_tokens] = token
-        batch._batch.pos[batch.n_tokens] = i
-        batch._batch.n_seq_id[batch.n_tokens] = 1
-        batch._batch.seq_id[batch.n_tokens][0] = 0 # Sequence ID 0
-        batch._batch.logits[batch.n_tokens] = 0 # Logits are ignored for input
+        batch.tokens[batch.n_tokens] = token
+        batch.pos[batch.n_tokens] = i
+        batch.n_seq_id[batch.n_tokens] = 1
+        batch.seq_id[batch.n_tokens][0] = 0 # Sequence ID 0
+        batch.logits[batch.n_tokens] = 0 # Logits are ignored for input
         batch.n_tokens += 1
         output_tokens.append(token) # Keep track of all tokens
 
@@ -80,8 +80,8 @@ def main():
 
     # Generation loop
     for i in range(args.max_tokens):
-        # Get logits for the *last* token position processed
-        logits = context.get_logits_for_token(batch.n_tokens - 1)
+        # Get logits for the next token prediction
+        logits = context.get_logits()
         # Sample the next token
         next_token = sample_token(
             logits,
@@ -104,11 +104,11 @@ def main():
         # Add the single next token to the batch
         # batch.add_sequence([next_token], seq_id=0, pos=current_pos) # Preferred way
         # Manual population:
-        batch._batch.token[batch.n_tokens] = next_token
-        batch._batch.pos[batch.n_tokens] = current_pos
-        batch._batch.n_seq_id[batch.n_tokens] = 1
-        batch._batch.seq_id[batch.n_tokens][0] = 0 # Sequence ID 0
-        batch._batch.logits[batch.n_tokens] = 1 # Enable logits for this token
+        batch.tokens[batch.n_tokens] = next_token
+        batch.pos[batch.n_tokens] = current_pos
+        batch.n_seq_id[batch.n_tokens] = 1
+        batch.seq_id[batch.n_tokens][0] = 0 # Sequence ID 0
+        batch.logits[batch.n_tokens] = 1 # Enable logits for this token
         batch.n_tokens += 1
 
         # Decode the single-token batch to update the context
