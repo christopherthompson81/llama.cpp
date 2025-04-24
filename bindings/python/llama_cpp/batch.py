@@ -20,7 +20,7 @@ class LlamaBatch:
     @property
     def tokens(self) -> np.ndarray:
         """Get the token IDs in the batch."""
-        return self._batch.tokens
+        return self._batch.get_tokens()
     
     @tokens.setter
     def tokens(self, value: Union[List[int], np.ndarray]) -> None:
@@ -31,14 +31,12 @@ class LlamaBatch:
             value: Array of token IDs
         """
         tokens_array = np.array(value, dtype=np.int32)
-        if tokens_array.size > len(self._batch.tokens):
-            raise ValueError(f"Token array size ({tokens_array.size}) exceeds batch capacity ({len(self._batch.tokens)})")
-        self._batch.tokens = tokens_array
+        self._batch.set_tokens(tokens_array)
     
     @property
     def positions(self) -> np.ndarray:
         """Get the positions in the batch."""
-        return self._batch.positions
+        return self._batch.get_positions()
     
     @positions.setter
     def positions(self, value: Union[List[int], np.ndarray]) -> None:
@@ -48,12 +46,12 @@ class LlamaBatch:
         Args:
             value: Array of positions
         """
-        self._batch.positions = np.array(value, dtype=np.int32)
+        self._batch.set_positions(np.array(value, dtype=np.int32))
     
     @property
     def n_seq_id(self) -> np.ndarray:
         """Get the sequence IDs in the batch."""
-        return self._batch.n_seq_id
+        return self._batch.get_n_seq_id()
     
     @n_seq_id.setter
     def n_seq_id(self, value: Union[List[int], np.ndarray]) -> None:
@@ -63,12 +61,12 @@ class LlamaBatch:
         Args:
             value: Array of sequence IDs
         """
-        self._batch.n_seq_id = np.array(value, dtype=np.int32)
+        self._batch.set_n_seq_id(np.array(value, dtype=np.int32))
     
     @property
     def logits(self) -> np.ndarray:
         """Get the logits flags in the batch."""
-        return self._batch.logits
+        return self._batch.get_logits()
     
     @logits.setter
     def logits(self, value: Union[List[int], np.ndarray]) -> None:
@@ -78,4 +76,4 @@ class LlamaBatch:
         Args:
             value: Array of logits flags (0 or 1)
         """
-        self._batch.logits = np.array(value, dtype=np.int8)
+        self._batch.set_logits(np.array(value, dtype=np.int8))
