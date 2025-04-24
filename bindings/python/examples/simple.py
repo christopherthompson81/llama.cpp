@@ -49,45 +49,51 @@ def main():
     
     print(f"Tokenizing prompt: {args.prompt}")
     tokens = model.tokenize(args.prompt)
-    
+    n_prompt_tokens = len(tokens)
+
+    print(f"Evaluating prompt...")
+    # Process the initial prompt tokens
+    context.eval(tokens)
+
     print(f"Generating {args.max_tokens} tokens...")
-    # Create a batch with the input tokens
-    batch = model.create_batch(len(tokens))
-    batch.tokens = tokens
-    
-    # Generate tokens one by one
     output_tokens = tokens.copy()
-    for _ in range(args.max_tokens):
-        # Process the batch
-        context.decode(batch)
-        
-        # Get logits for the last token
-        logits = context.get_logits()
-        
-        # Sample the next token (simple implementation)
+    
+    # Get logits for the next token after processing the prompt
+    logits = context.get_logits()
+
+    # Generation loop
+    for i in range(args.max_tokens):
+        # Sample the next token
         next_token = sample_token(
-            logits, 
+            logits,
             temperature=args.temperature,
             top_p=args.top_p,
             top_k=args.top_k
         )
-        
+
         # Add the new token to our output
         output_tokens = np.append(output_tokens, next_token)
-        
-        # Prepare the next batch with just the new token
-        batch = model.create_batch(1)
-        batch.tokens = [next_token]
-        
+
         # Stop if we generate EOS
         if next_token == model.vocab.eos_token:
             break
-    
-    # Get just the generated text (excluding the prompt)
-    generated_text = model.detokenize(output_tokens[len(tokens):])
-    
+
+        # Prepare the batch for the next token
+        batch = model.create_batch(1)
+        batch.tokens = [next_token]
+
+        # Decode the single-token batch to update the context
+        context.decode(batch)
+
+        # Get logits for the *next* token
+        logits = context.get_logits()
+
+    # Detokenize only the generated part
+    generated_text = model.detokenize(output_tokens[n_prompt_tokens:])
+
     print("\nGenerated text:")
     print(f"{args.prompt}{generated_text}")
+        
     
     # Print some model information
     print("\nModel information:")
