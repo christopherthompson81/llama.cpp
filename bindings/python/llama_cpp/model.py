@@ -1,7 +1,10 @@
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, TYPE_CHECKING
 import numpy as np
 
 from . import llama_cpp
+
+if TYPE_CHECKING:
+    from .context import LlamaContext
 
 
 class LlamaModel:
