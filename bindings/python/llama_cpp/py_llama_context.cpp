@@ -1,5 +1,13 @@
 #include "py_llama_context.h"
 
+#include <stdexcept>
+
+#include "llama.h"
+#include "py_llama_batch.h"
+#include "py_llama_model.h"
+#include "pybind11/numpy.h"
+#include "pybind11/pytypes.h"
+
 PyLlamaContext::PyLlamaContext(PyLlamaModel& model, const py::dict& params_dict) : model(model) {
     llama_context_params params = llama_context_default_params();
 
