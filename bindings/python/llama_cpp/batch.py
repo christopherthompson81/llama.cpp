@@ -33,13 +33,6 @@ class LlamaBatch:
         """
         tokens_array = np.array(value, dtype=np.int32)
 
-        # Get the batch capacity
-        batch = self._batch.get_batch()
-
-        # Check if the array is too large before setting
-        if tokens_array.size > batch.n_tokens:
-            raise ValueError(f"Token array size ({tokens_array.size}) exceeds batch capacity ({batch.n_tokens})")
-
         # Use the property setter from the C++ binding
         self._batch.tokens = tokens_array
 
