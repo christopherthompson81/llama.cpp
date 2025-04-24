@@ -61,20 +61,30 @@ def main():
     output_tokens = []
     batch.n_tokens = 0 # Ensure batch is clear initially
 
-    # Add prompt tokens to the batch
-    for i, token in enumerate(tokens):
-        # batch.add_sequence([token], seq_id=0, pos=i) # Preferred way if available
-        # Manual population if add_sequence is not available/suitable:
-        batch.tokens[batch.n_tokens] = token
-        batch.pos[batch.n_tokens] = i
-        batch.n_seq_id[batch.n_tokens] = 1
-        batch.seq_id[batch.n_tokens][0] = 0 # Sequence ID 0
-        batch.logits[batch.n_tokens] = 0 # Logits are ignored for input
-        batch.n_tokens += 1
-        output_tokens.append(token) # Keep track of all tokens
+    # Prepare batch for prompt processing
+    prompt_tokens_np = np.array(tokens, dtype=np.int32)
+    prompt_pos_np = np.arange(0, n_prompt_tokens, dtype=np.int32)
+    prompt_n_seq_id_np = np.array([1] * n_prompt_tokens, dtype=np.int32)
+    # seq_id needs to be handled carefully based on how the C API expects it.
+    # Assuming a flat array or list of lists might work via the setter.
+    # Let's try a simple list of lists first. If it fails, might need numpy array.
+    prompt_seq_id_list = [[0]] * n_prompt_tokens 
+    prompt_logits_np = np.array([0] * n_prompt_tokens, dtype=np.int8) # Logits off for prompt
 
+    batch.n_tokens = n_prompt_tokens
+    batch.tokens = prompt_tokens_np
+    batch.pos = prompt_pos_np
+    batch.n_seq_id = prompt_n_seq_id_np
+    batch.seq_id = prompt_seq_id_list # Assign list of lists
+    batch.logits = prompt_logits_np
+    
     # Decode the prompt batch
-    context.decode(batch)
+    decode_result = context.decode(batch)
+    if decode_result != 0:
+        print(f"Warning: context.decode returned {decode_result}")
+
+    # Keep track of output tokens (including prompt)
+    output_tokens.extend(tokens)
 
     print(f"Generating {args.max_tokens} tokens...")
 
@@ -97,25 +107,29 @@ def main():
         if next_token == model.vocab.eos_token:
             break
 
-        # Prepare the batch for the *next* token
-        batch.n_tokens = 0 # Clear the batch for the next token
+        # Prepare the batch for the *next* single token
         current_pos = n_prompt_tokens + i # Position of the token we are about to decode
+        
+        token_np = np.array([next_token], dtype=np.int32)
+        pos_np = np.array([current_pos], dtype=np.int32)
+        n_seq_id_np = np.array([1], dtype=np.int32)
+        seq_id_list = [[0]] # List of lists for one token
+        logits_np = np.array([1], dtype=np.int8) # Enable logits for prediction
 
-        # Add the single next token to the batch
-        # batch.add_sequence([next_token], seq_id=0, pos=current_pos) # Preferred way
-        # Manual population:
-        batch.tokens[batch.n_tokens] = next_token
-        batch.pos[batch.n_tokens] = current_pos
-        batch.n_seq_id[batch.n_tokens] = 1
-        batch.seq_id[batch.n_tokens][0] = 0 # Sequence ID 0
-        batch.logits[batch.n_tokens] = 1 # Enable logits for this token
-        batch.n_tokens += 1
+        batch.n_tokens = 1
+        batch.tokens = token_np
+        batch.pos = pos_np
+        batch.n_seq_id = n_seq_id_np
+        batch.seq_id = seq_id_list
+        batch.logits = logits_np
 
         # Decode the single-token batch to update the context
-        context.decode(batch)
+        decode_result = context.decode(batch)
+        if decode_result != 0:
+            print(f"Warning: context.decode returned {decode_result} during generation")
+            break # Stop generation if decode fails
 
-    # Detokenize only the generated part
-    # Convert list to numpy array for slicing if needed, or detokenize directly
+    # Detokenize only the generated part (output_tokens now includes prompt)
     generated_tokens = output_tokens[n_prompt_tokens:]
     generated_text = model.detokenize(generated_tokens)
 
