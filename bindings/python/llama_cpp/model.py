@@ -1,5 +1,4 @@
 from typing import Dict, List, Optional, TYPE_CHECKING
-import numpy as np
 
 from . import llama_cpp
 
