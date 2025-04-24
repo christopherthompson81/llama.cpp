@@ -1,4 +1,5 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union, Any
+import numpy as np
 
 from . import llama_cpp
 
