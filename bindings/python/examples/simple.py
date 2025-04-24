@@ -51,31 +51,26 @@ def main():
     tokens = model.tokenize(args.prompt)
     n_prompt_tokens = len(tokens)
 
-    # Create a reusable batch sized to the context's n_batch
-    # n_batch = context.n_batch # Ideal if available
-    n_batch = 512 # Use the logged value as a fallback
-    batch = model.create_batch(n_batch)
-
-    print(f"Evaluating prompt...")
+    print(f"Evaluating prompt token by token...")
     output_tokens = []
 
-    # Populate the batch for the prompt
-    batch.n_tokens = n_prompt_tokens
-    for i in range(n_prompt_tokens):
-        batch.tokens[i] = tokens[i]
-        batch.pos[i] = i
-        batch.n_seq_id[i] = 1
-        batch.seq_id[i][0] = 0 # Assuming sequence ID 0
-        batch.logits[i] = 0 # Logits off for prompt processing
+    # Process prompt token by token using decode with batch size 1
+    for i, token in enumerate(tokens):
+        batch = model.create_batch(1) # Create new batch each time
+        # Note: Assigning Python lists directly to batch attributes.
+        # This might fail if the underlying setters expect specific types
+        # or if there's a size mismatch issue even for n_batch=1.
+        batch.tokens = [token]
+        batch.pos = [i]
+        batch.n_seq_id = [1]
+        batch.seq_id = [[0]] # Assuming sequence ID 0
+        batch.logits = [0] # Logits off for prompt processing
 
-    # Decode the prompt batch
-    decode_result = context.decode(batch)
-    if decode_result != 0:
-        print(f"Warning: context.decode returned {decode_result} for prompt")
-        return # Stop if prompt decoding fails
-
-    # Keep track of output tokens (including prompt)
-    output_tokens.extend(tokens)
+        decode_result = context.decode(batch)
+        if decode_result != 0:
+            print(f"Warning: context.decode returned {decode_result} for prompt token {i}")
+            return # Stop if prompt decoding fails
+        output_tokens.append(token) # Keep track of processed tokens
 
     print(f"Generating {args.max_tokens} tokens...")
 
@@ -98,14 +93,16 @@ def main():
         if next_token == model.vocab.eos_token:
             break
 
-        # Prepare the reusable batch for the single next token
+        # Prepare a new batch for the single next token
+        batch = model.create_batch(1) # Create new batch each time
         current_pos = n_prompt_tokens + i # Position of the token we are about to decode
-        batch.n_tokens = 1
-        batch.tokens[0] = next_token
-        batch.pos[0] = current_pos
-        batch.n_seq_id[0] = 1
-        batch.seq_id[0][0] = 0 # Assuming sequence ID 0
-        batch.logits[0] = 1 # Logits on for prediction
+
+        # Populate the new batch
+        batch.tokens = [next_token]
+        batch.pos = [current_pos]
+        batch.n_seq_id = [1]
+        batch.seq_id = [[0]] # Assuming sequence ID 0
+        batch.logits = [1] # Logits on for prediction
 
         # Decode the single-token batch to update the context
         decode_result = context.decode(batch)
