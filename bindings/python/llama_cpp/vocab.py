@@ -1,7 +1,7 @@
 from typing import List, Optional
 import numpy as np
 
-from . import llama_cpp
+from . import llama_cpp, _LlamaVocab
 
 class LlamaVocab:
     """High-level Python wrapper for llama.cpp vocabulary."""

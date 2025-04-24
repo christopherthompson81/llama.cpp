@@ -1,14 +1,14 @@
 from typing import List, Optional
 import numpy as np
 
-from . import llama_cpp
+from . import llama_cpp, _LlamaSampler
 
 class LlamaSampler:
     """High-level Python wrapper for llama.cpp sampler."""
     
     def __init__(self):
         """Initialize a LlamaSampler."""
-        self._sampler = llama_cpp.LlamaSampler()
+        self._sampler = _LlamaSampler()
     
     def add_top_k(self, k: int) -> None:
         """
@@ -69,7 +69,7 @@ class LlamaSampler:
             The sampled token ID
         """
         # Get the raw context pointer
-        ctx_ptr = self._sampler.get_context_ptr(ctx._ctx)
+        ctx_ptr = self._sampler.get_context_ptr(ctx)
         return self._sampler.sample(ctx_ptr, last_tokens)
     
     def accept(self, token: int) -> None:

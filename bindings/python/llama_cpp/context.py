@@ -1,7 +1,7 @@
 from typing import Dict, List, Optional, Union, Any, Tuple
 import numpy as np
 
-from . import llama_cpp
+from . import llama_cpp, _LlamaContext
 from .model import LlamaModel
 from .batch import LlamaBatch
 
@@ -26,7 +26,7 @@ class LlamaContext:
         if 'n_threads' not in params:
             params['n_threads'] = 0  # Auto-detect
             
-        self._ctx = llama_cpp.LlamaContext(model._model, params)
+        self._ctx = model._model.create_context(**params)
         self._last_tokens = []
     
     def decode(self, batch: LlamaBatch) -> bool:
@@ -99,7 +99,7 @@ class LlamaContext:
         from .sampler import LlamaSampler
         
         # Create a batch for the input tokens
-        batch = LlamaBatch(len(tokens))
+        batch = self._model.create_batch(len(tokens))
         batch.tokens = np.array(tokens, dtype=np.int32)
         batch.positions = np.arange(len(tokens), dtype=np.int32)
         batch.logits = np.ones(len(tokens), dtype=np.int8)
@@ -138,7 +138,7 @@ class LlamaContext:
                 break
                 
             # Create a batch for the new token
-            batch = LlamaBatch(1)
+            batch = self._model.create_batch(1)
             batch.tokens = np.array([token], dtype=np.int32)
             batch.positions = np.array([len(all_tokens) - 1], dtype=np.int32)
             batch.logits = np.ones(1, dtype=np.int8)

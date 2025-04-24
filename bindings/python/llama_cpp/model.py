@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional, TYPE_CHECKING
 
-from . import llama_cpp
+from . import llama_cpp, _LlamaModel
+from .batch import LlamaBatch
 
 if TYPE_CHECKING:
     from .context import LlamaContext
@@ -16,7 +17,7 @@ class LlamaModel:
         Args:
             model_path: Path to the GGUF model file
         """
-        self._model = llama_cpp.LlamaModel(model_path)
+        self._model = _LlamaModel(model_path)
         self._vocab = self._model.vocab
 
     def create_context(self, **kwargs) -> 'LlamaContext':
@@ -31,6 +32,20 @@ class LlamaModel:
         """
         from .context import LlamaContext
         return LlamaContext(self, kwargs)
+        
+    def create_batch(self, n_tokens: int, embd: int = 0, n_seq_max: int = 1) -> LlamaBatch:
+        """
+        Create a new batch for token processing.
+        
+        Args:
+            n_tokens: Maximum number of tokens in the batch
+            embd: Embedding dimension (0 for token-based batch)
+            n_seq_max: Maximum number of sequences
+            
+        Returns:
+            A new LlamaBatch instance
+        """
+        return LlamaBatch(n_tokens, embd, n_seq_max)
 
     def tokenize(self, text: str, add_bos: bool = False, special: bool = True) -> List[int]:
         """
