@@ -13,6 +13,7 @@ class PyLlamaBatch {
 private:
     llama_batch batch;
     bool owns_batch;
+    int32_t n_seq_max; // Store the max sequences per token
 
 public:
     /**

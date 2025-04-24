@@ -1,11 +1,18 @@
 #include "py_llama_batch.h"
 
-PyLlamaBatch::PyLlamaBatch(int32_t n_tokens, int32_t embd, int32_t n_seq_max) {
+PyLlamaBatch::PyLlamaBatch(int32_t n_tokens, int32_t embd, int32_t n_seq_max) : n_seq_max(n_seq_max) { // Initialize the member variable
     batch = llama_batch_init(n_tokens, embd, n_seq_max);
     owns_batch = true;
 }
 
-PyLlamaBatch::PyLlamaBatch(llama_batch batch, bool owns_batch) : batch(batch), owns_batch(owns_batch) {}
+// Constructor for wrapping an existing batch - needs to handle n_seq_max somehow if resizing is ever needed from this state.
+// For now, let's assume it's not resized or n_seq_max isn't critical for wrapped batches.
+// If resizing becomes an issue for wrapped batches, this constructor might need adjustment.
+PyLlamaBatch::PyLlamaBatch(llama_batch batch, bool owns_batch) : batch(batch), owns_batch(owns_batch), n_seq_max(1) {
+    // WARNING: Assuming n_seq_max = 1 for wrapped batches. This might be incorrect
+    // if the wrapped batch supports more and resizing is attempted later.
+    // A better approach might be to require n_seq_max when wrapping.
+}
 
 PyLlamaBatch::~PyLlamaBatch() {
     if (owns_batch) {
@@ -32,8 +39,9 @@ void PyLlamaBatch::set_tokens(py::array_t<llama_token> tokens) {
     // Check if the array is too large
     if (r.shape(0) > batch.n_tokens) {
         // Resize the batch to accommodate the tokens
-        llama_batch new_batch = llama_batch_init(r.shape(0), batch.embd, batch.n_seq_max);
-        
+        // Use the n_seq_max stored in this PyLlamaBatch instance
+        llama_batch new_batch = llama_batch_init(r.shape(0), batch.embd, this->n_seq_max);
+
         // Copy existing data if needed
         if (batch.n_tokens > 0) {
             // Copy tokens that will fit
@@ -51,8 +59,9 @@ void PyLlamaBatch::set_tokens(py::array_t<llama_token> tokens) {
                 // This is a 2D array, need to copy each row
                 for (int i = 0; i < batch.n_tokens; i++) {
                     if (i < copy_size) {
-                        std::memcpy(new_batch.seq_id[i], batch.seq_id[i], 
-                                    batch.n_seq_max * sizeof(llama_seq_id));
+                        // Copy the actual number of sequence IDs for this token
+                        std::memcpy(new_batch.seq_id[i], batch.seq_id[i],
+                                    batch.n_seq_id[i] * sizeof(llama_seq_id));
                     }
                 }
             }
