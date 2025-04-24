@@ -227,6 +227,8 @@ public:
         for (py::ssize_t i = 0; i < r.shape(0); i++) {
             batch.token[i] = r(i);
         }
+        // Update n_tokens to match the actual number of tokens
+        batch.n_tokens = r.shape(0);
     }
 
     py::array_t<llama_pos> get_positions() const {
@@ -497,7 +499,10 @@ PYBIND11_MODULE(llama_cpp, m) {
         .def_property_readonly("n_head_kv", &PyLlamaModel::n_head_kv)
         .def_property_readonly("vocab", &PyLlamaModel::get_vocab)
         .def("meta_val", &PyLlamaModel::meta_val)
-        .def("chat_template", &PyLlamaModel::chat_template);
+        .def("chat_template", &PyLlamaModel::chat_template)
+        .def("create_batch", [](PyLlamaModel& model, int n_tokens) {
+            return PyLlamaBatch(n_tokens);
+        });
     
     // Expose LlamaContext
     py::class_<PyLlamaContext>(m, "LlamaContext")

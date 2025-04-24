@@ -6,7 +6,29 @@ import sys
 # Add the parent directory to the path so we can import the llama_cpp package
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import numpy as np
 from llama_cpp import LlamaModel
+
+def sample_token(logits, temperature=0.8, top_p=0.95, top_k=40):
+    """Simple token sampling function"""
+    # Apply temperature
+    if temperature > 0:
+        logits = logits / temperature
+    
+    # Convert to probabilities
+    probs = np.exp(logits - np.max(logits))
+    probs = probs / np.sum(probs)
+    
+    # Apply top-k
+    if top_k > 0:
+        indices = np.argsort(-probs)[:top_k]
+        probs_topk = probs[indices]
+        probs_topk = probs_topk / np.sum(probs_topk)
+        idx = np.random.choice(indices, p=probs_topk)
+    else:
+        idx = np.random.choice(len(probs), p=probs)
+    
+    return idx
 
 def main():
     parser = argparse.ArgumentParser(description="Simple example of using llama-cpp-python")
@@ -29,13 +51,37 @@ def main():
     tokens = model.tokenize(args.prompt)
     
     print(f"Generating {args.max_tokens} tokens...")
-    output_tokens = context.generate(
-        tokens, 
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        top_k=args.top_k
-    )
+    # Create a batch with the input tokens
+    batch = model.create_batch(len(tokens))
+    batch.tokens = tokens
+    
+    # Generate tokens one by one
+    output_tokens = tokens.copy()
+    for _ in range(args.max_tokens):
+        # Process the batch
+        context.decode(batch)
+        
+        # Get logits for the last token
+        logits = context.get_logits()
+        
+        # Sample the next token (simple implementation)
+        next_token = sample_token(
+            logits, 
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k
+        )
+        
+        # Add the new token to our output
+        output_tokens = np.append(output_tokens, next_token)
+        
+        # Prepare the next batch with just the new token
+        batch = model.create_batch(1)
+        batch.tokens = [next_token]
+        
+        # Stop if we generate EOS
+        if next_token == model.vocab.eos_token:
+            break
     
     # Get just the generated text (excluding the prompt)
     generated_text = model.detokenize(output_tokens[len(tokens):])
