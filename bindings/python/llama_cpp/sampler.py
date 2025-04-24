@@ -1,7 +1,8 @@
 from typing import List, Optional
 import numpy as np
 
-from . import llama_cpp, _LlamaSampler
+from . import llama_cpp
+from . import _LlamaSampler
 
 class LlamaSampler:
     """High-level Python wrapper for llama.cpp sampler."""

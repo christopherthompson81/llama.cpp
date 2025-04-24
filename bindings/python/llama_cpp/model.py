@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional, TYPE_CHECKING
 
-from . import llama_cpp, _LlamaModel
+from . import llama_cpp
+from . import _LlamaModel
 from .batch import LlamaBatch
 
 if TYPE_CHECKING:

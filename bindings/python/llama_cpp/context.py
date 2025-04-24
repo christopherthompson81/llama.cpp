@@ -1,7 +1,8 @@
 from typing import Dict, List, Optional, Union, Any, Tuple
 import numpy as np
 
-from . import llama_cpp, _LlamaContext
+from . import llama_cpp
+from . import _LlamaContext
 from .model import LlamaModel
 from .batch import LlamaBatch
 
