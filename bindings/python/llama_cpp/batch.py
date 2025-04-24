@@ -30,7 +30,10 @@ class LlamaBatch:
         Args:
             value: Array of token IDs
         """
-        self._batch.tokens = np.array(value, dtype=np.int32)
+        tokens_array = np.array(value, dtype=np.int32)
+        if tokens_array.size > len(self._batch.tokens):
+            raise ValueError(f"Token array size ({tokens_array.size}) exceeds batch capacity ({len(self._batch.tokens)})")
+        self._batch.tokens = tokens_array
     
     @property
     def positions(self) -> np.ndarray:

@@ -498,10 +498,26 @@ PYBIND11_MODULE(llama_cpp, m) {
         .def_property_readonly("n_head", &PyLlamaModel::n_head)
         .def_property_readonly("n_head_kv", &PyLlamaModel::n_head_kv)
         .def_property_readonly("vocab", &PyLlamaModel::get_vocab)
+        .def_property_readonly("vocab_size", [](PyLlamaModel& model) {
+            return model.get_vocab().n_tokens();
+        })
         .def("meta_val", &PyLlamaModel::meta_val)
         .def("chat_template", &PyLlamaModel::chat_template)
         .def("create_batch", [](PyLlamaModel& model, int n_tokens) {
             return PyLlamaBatch(n_tokens);
+        })
+        .def("create_context", [](PyLlamaModel& model, py::kwargs kwargs) {
+            py::dict params_dict;
+            for (auto item : kwargs) {
+                params_dict[item.first] = item.second;
+            }
+            return PyLlamaContext(model, params_dict);
+        })
+        .def("tokenize", [](PyLlamaModel& model, const std::string& text, bool add_bos, bool special) {
+            return model.get_vocab().tokenize(text, add_bos, special);
+        }, py::arg("text"), py::arg("add_bos") = false, py::arg("special") = true)
+        .def("detokenize", [](PyLlamaModel& model, const std::vector<llama_token>& tokens) {
+            return model.get_vocab().detokenize(tokens);
         });
     
     // Expose LlamaContext
