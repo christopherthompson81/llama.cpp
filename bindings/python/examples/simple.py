@@ -51,15 +51,25 @@ def main():
     tokens = model.tokenize(args.prompt)
     n_prompt_tokens = len(tokens)
 
+    # Create a reusable batch sized to the context's n_batch
+    # n_batch = context.n_batch # Ideal if available
+    n_batch = 512 # Use the logged value as a fallback
+    batch = model.create_batch(n_batch)
+
     print(f"Evaluating prompt...")
     output_tokens = []
 
-    # Create a batch sized specifically for the prompt
-    prompt_batch = model.create_batch(n_prompt_tokens)
-    prompt_batch.tokens = tokens # Assign the raw token list
+    # Populate the batch for the prompt
+    batch.n_tokens = n_prompt_tokens
+    for i in range(n_prompt_tokens):
+        batch.tokens[i] = tokens[i]
+        batch.pos[i] = i
+        batch.n_seq_id[i] = 1
+        batch.seq_id[i][0] = 0 # Assuming sequence ID 0
+        batch.logits[i] = 0 # Logits off for prompt processing
 
     # Decode the prompt batch
-    decode_result = context.decode(prompt_batch)
+    decode_result = context.decode(batch)
     if decode_result != 0:
         print(f"Warning: context.decode returned {decode_result} for prompt")
         return # Stop if prompt decoding fails
@@ -88,12 +98,17 @@ def main():
         if next_token == model.vocab.eos_token:
             break
 
-        # Create a new batch for the single next token
-        gen_batch = model.create_batch(1)
-        gen_batch.tokens = [next_token] # Assign list with single token
+        # Prepare the reusable batch for the single next token
+        current_pos = n_prompt_tokens + i # Position of the token we are about to decode
+        batch.n_tokens = 1
+        batch.tokens[0] = next_token
+        batch.pos[0] = current_pos
+        batch.n_seq_id[0] = 1
+        batch.seq_id[0][0] = 0 # Assuming sequence ID 0
+        batch.logits[0] = 1 # Logits on for prediction
 
         # Decode the single-token batch to update the context
-        decode_result = context.decode(gen_batch)
+        decode_result = context.decode(batch)
         if decode_result != 0:
             print(f"Warning: context.decode returned {decode_result} during generation")
             break # Stop generation if decode fails
