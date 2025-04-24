@@ -52,11 +52,15 @@ def main():
     n_prompt_tokens = len(tokens)
 
     print(f"Evaluating prompt...")
-    # Process the initial prompt tokens
-    context.eval(tokens)
+    output_tokens = []
+    # Process the prompt tokens one by one
+    for token in tokens:
+        batch = model.create_batch(1)
+        batch.tokens = [token]
+        context.decode(batch)
+        output_tokens.append(token)
 
     print(f"Generating {args.max_tokens} tokens...")
-    output_tokens = tokens.copy()
     
     # Get logits for the next token after processing the prompt
     logits = context.get_logits()
@@ -72,7 +76,7 @@ def main():
         )
 
         # Add the new token to our output
-        output_tokens = np.append(output_tokens, next_token)
+        output_tokens.append(next_token)
 
         # Stop if we generate EOS
         if next_token == model.vocab.eos_token:
@@ -89,7 +93,9 @@ def main():
         logits = context.get_logits()
 
     # Detokenize only the generated part
-    generated_text = model.detokenize(output_tokens[n_prompt_tokens:])
+    # Convert list to numpy array for slicing if needed, or detokenize directly
+    generated_tokens = output_tokens[n_prompt_tokens:]
+    generated_text = model.detokenize(generated_tokens)
 
     print("\nGenerated text:")
     print(f"{args.prompt}{generated_text}")
