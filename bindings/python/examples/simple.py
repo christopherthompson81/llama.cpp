@@ -52,9 +52,7 @@ def main():
     
     print(f"Generating {args.max_tokens} tokens...")
     # Create a batch with the input tokens
-    # Use a larger batch size to ensure it can hold all tokens
-    batch_size = max(len(tokens), 512)  # At least 512 tokens for safety
-    batch = model.create_batch(batch_size)
+    batch = model.create_batch(len(tokens))
     batch.tokens = tokens
     
     # Generate tokens one by one
@@ -78,8 +76,7 @@ def main():
         output_tokens = np.append(output_tokens, next_token)
         
         # Prepare the next batch with just the new token
-        # Use a larger batch size for safety
-        batch = model.create_batch(512)
+        batch = model.create_batch(1)
         batch.tokens = [next_token]
         
         # Stop if we generate EOS
