@@ -21,8 +21,25 @@ public:
     void add_top_p(float p);
     void add_temperature(float temp);
     void add_mirostat(float tau, float eta, int m);
+    /**
+     * @brief Add a grammar-based sampler to the chain
+     * @param grammar_str The grammar rules as a string
+     */
     void add_grammar(const std::string& grammar_str);
-    llama_token sample(void* ctx_ptr, const std::vector<llama_token>& last_tokens);
+    
+    /**
+     * @brief Sample a token from the context's logits
+     * @param ctx_ptr Pointer to the llama_context
+     * @param last_tokens Vector of previous tokens (unused in current implementation)
+     * @return The sampled token
+     */
+    llama_token sample(void* ctx_ptr, const std::vector<llama_token>& last_tokens = {});
+    
+    /**
+     * @brief Get the raw context pointer from a PyLlamaContext
+     * @param ctx The Python context wrapper
+     * @return Raw pointer to the underlying llama_context
+     */
     void* get_context_ptr(PyLlamaContext& ctx);
     void accept(llama_token token);
 };
