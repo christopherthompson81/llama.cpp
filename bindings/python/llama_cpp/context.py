@@ -26,7 +26,9 @@ class LlamaContext:
         if 'n_threads' not in params:
             params['n_threads'] = 0  # Auto-detect
             
-        self._ctx = model._model.create_context(**params)
+        # Create context directly from the C++ binding
+        from .llama_cpp import LlamaContext as _LlamaContext
+        self._ctx = _LlamaContext(model._model, params)
         self._last_tokens = []
     
     def decode(self, batch: LlamaBatch) -> bool:

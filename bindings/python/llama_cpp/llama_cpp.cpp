@@ -503,9 +503,9 @@ PYBIND11_MODULE(llama_cpp, m) {
         })
         .def("meta_val", &PyLlamaModel::meta_val)
         .def("chat_template", &PyLlamaModel::chat_template)
-        .def("create_batch", [](PyLlamaModel& model, int n_tokens) {
-            return PyLlamaBatch(n_tokens);
-        })
+        .def("create_batch", [](PyLlamaModel& model, int n_tokens, int embd, int n_seq_max) {
+            return PyLlamaBatch(n_tokens, embd, n_seq_max);
+        }, py::arg("n_tokens"), py::arg("embd") = 0, py::arg("n_seq_max") = 1)
         .def("create_context", [](PyLlamaModel& model, py::kwargs kwargs) {
             py::dict params_dict;
             for (auto item : kwargs) {
