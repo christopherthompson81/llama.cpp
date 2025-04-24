@@ -66,10 +66,20 @@ if(NOT pybind11_FOUND)
 endif()
 
 # Create the module using standard CMake functions
-add_library(llama_cpp MODULE llama_cpp/llama_cpp.cpp)
+add_library(llama_cpp MODULE 
+    llama_cpp/llama_cpp.cpp
+    llama_cpp/py_llama_model.cpp
+    llama_cpp/py_llama_context.cpp
+    llama_cpp/py_llama_batch.cpp
+    llama_cpp/py_llama_sampler.cpp
+    llama_cpp/py_llama_vocab.cpp
+    llama_cpp/py_chat_template.cpp
+)
+
 target_link_libraries(llama_cpp PRIVATE llama)
 target_include_directories(llama_cpp PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/llama_cpp
     ${PYTHON_INCLUDE_DIR}
     ${PYTHON_PLATINCLUDE_DIR}
     ${pybind11_INCLUDE_DIRS}
