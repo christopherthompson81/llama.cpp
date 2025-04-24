@@ -141,6 +141,10 @@ public:
             llama_free(ctx);
         }
     }
+    
+    void* get_context_ptr() const {
+        return static_cast<void*>(ctx);
+    }
 
     bool decode(const PyLlamaBatch& batch);
 
@@ -329,8 +333,14 @@ public:
         llama_sampler_chain_add(sampler, llama_sampler_init_grammar(vocab, grammar_str.c_str(), "root"));
     }
 
-    llama_token sample(llama_context* ctx, const std::vector<llama_token>& last_tokens) {
+    llama_token sample(void* ctx_ptr, const std::vector<llama_token>& last_tokens) {
+        llama_context* ctx = static_cast<llama_context*>(ctx_ptr);
         return llama_sampler_sample(sampler, ctx, -1);
+    }
+    
+    // Helper method to get the raw context pointer
+    void* get_context_ptr(PyLlamaContext& ctx) {
+        return ctx.get_context_ptr();
     }
 
     void accept(llama_token token) {
@@ -515,7 +525,8 @@ PYBIND11_MODULE(llama_cpp, m) {
         .def("add_mirostat", &PyLlamaSampler::add_mirostat)
         .def("add_grammar", &PyLlamaSampler::add_grammar)
         .def("sample", &PyLlamaSampler::sample)
-        .def("accept", &PyLlamaSampler::accept);
+        .def("accept", &PyLlamaSampler::accept)
+        .def("get_context_ptr", &PyLlamaSampler::get_context_ptr);
     
     // Expose LlamaVocab
     py::class_<PyLlamaVocab>(m, "LlamaVocab")

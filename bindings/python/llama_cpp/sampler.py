@@ -62,13 +62,15 @@ class LlamaSampler:
         Sample the next token.
         
         Args:
-            ctx: The LlamaContext._ctx object
+            ctx: The LlamaContext object
             last_tokens: Recent token history
             
         Returns:
             The sampled token ID
         """
-        return self._sampler.sample(ctx, last_tokens)
+        # Get the raw context pointer
+        ctx_ptr = self._sampler.get_context_ptr(ctx._ctx)
+        return self._sampler.sample(ctx_ptr, last_tokens)
     
     def accept(self, token: int) -> None:
         """

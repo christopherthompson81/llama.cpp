@@ -124,7 +124,7 @@ class LlamaContext:
         # Generate new tokens
         for i in range(max_tokens):
             # Sample the next token
-            token = sampler.sample(self._ctx._ctx, self._last_tokens[-min(len(self._last_tokens), 64):])
+            token = sampler.sample(self._ctx, self._last_tokens[-min(len(self._last_tokens), 64):])
             
             # Accept the token
             sampler.accept(token)
