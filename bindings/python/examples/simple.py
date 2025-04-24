@@ -51,37 +51,18 @@ def main():
     tokens = model.tokenize(args.prompt)
     n_prompt_tokens = len(tokens)
 
-    # Create a batch for processing
-    # Use n_batch from context if available, otherwise default (e.g., 512)
-    # n_batch = context.n_batch if hasattr(context, 'n_batch') else 512 # Check LlamaContext API
-    n_batch = 512 # Assuming default batch size if not directly accessible
-    batch = model.create_batch(n_batch)
-    
     print(f"Evaluating prompt...")
     output_tokens = []
-    batch.n_tokens = 0 # Ensure batch is clear initially
 
-    # Prepare batch for prompt processing
-    prompt_tokens_np = np.array(tokens, dtype=np.int32)
-    prompt_pos_np = np.arange(0, n_prompt_tokens, dtype=np.int32)
-    prompt_n_seq_id_np = np.array([1] * n_prompt_tokens, dtype=np.int32)
-    # seq_id needs to be handled carefully based on how the C API expects it.
-    # Assuming a flat array or list of lists might work via the setter.
-    # Let's try a simple list of lists first. If it fails, might need numpy array.
-    prompt_seq_id_list = [[0]] * n_prompt_tokens 
-    prompt_logits_np = np.array([0] * n_prompt_tokens, dtype=np.int8) # Logits off for prompt
+    # Create a batch sized specifically for the prompt
+    prompt_batch = model.create_batch(n_prompt_tokens)
+    prompt_batch.tokens = tokens # Assign the raw token list
 
-    batch.n_tokens = n_prompt_tokens
-    batch.tokens = prompt_tokens_np
-    batch.pos = prompt_pos_np
-    batch.n_seq_id = prompt_n_seq_id_np
-    batch.seq_id = prompt_seq_id_list # Assign list of lists
-    batch.logits = prompt_logits_np
-    
     # Decode the prompt batch
-    decode_result = context.decode(batch)
+    decode_result = context.decode(prompt_batch)
     if decode_result != 0:
-        print(f"Warning: context.decode returned {decode_result}")
+        print(f"Warning: context.decode returned {decode_result} for prompt")
+        return # Stop if prompt decoding fails
 
     # Keep track of output tokens (including prompt)
     output_tokens.extend(tokens)
@@ -107,24 +88,12 @@ def main():
         if next_token == model.vocab.eos_token:
             break
 
-        # Prepare the batch for the *next* single token
-        current_pos = n_prompt_tokens + i # Position of the token we are about to decode
-        
-        token_np = np.array([next_token], dtype=np.int32)
-        pos_np = np.array([current_pos], dtype=np.int32)
-        n_seq_id_np = np.array([1], dtype=np.int32)
-        seq_id_list = [[0]] # List of lists for one token
-        logits_np = np.array([1], dtype=np.int8) # Enable logits for prediction
-
-        batch.n_tokens = 1
-        batch.tokens = token_np
-        batch.pos = pos_np
-        batch.n_seq_id = n_seq_id_np
-        batch.seq_id = seq_id_list
-        batch.logits = logits_np
+        # Create a new batch for the single next token
+        gen_batch = model.create_batch(1)
+        gen_batch.tokens = [next_token] # Assign list with single token
 
         # Decode the single-token batch to update the context
-        decode_result = context.decode(batch)
+        decode_result = context.decode(gen_batch)
         if decode_result != 0:
             print(f"Warning: context.decode returned {decode_result} during generation")
             break # Stop generation if decode fails
