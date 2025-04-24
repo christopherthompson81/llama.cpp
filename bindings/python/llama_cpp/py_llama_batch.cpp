@@ -148,3 +148,54 @@ void PyLlamaBatch::set_logits(py::array_t<int8_t> logits) {
         batch.logits[i] = r(i);
     }
 }
+
+py::array_t<llama_seq_id> PyLlamaBatch::get_sequence_ids() const {
+    if (!batch.seq_id || !batch.seq_id[0] || batch.n_tokens == 0) {
+        // Return an empty array if seq_id is null, its first row is null, or batch is empty
+        return py::array_t<llama_seq_id>();
+    }
+    // Assumption: seq_id points to a contiguous block of memory for all seq_ids,
+    // starting from batch.seq_id[0]. This is how llama_batch_init allocates it.
+    return py::array_t<llama_seq_id>(
+        {static_cast<py::ssize_t>(batch.n_tokens), static_cast<py::ssize_t>(this->n_seq_max)}, // Shape (n_tokens, n_seq_max)
+        {sizeof(llama_seq_id) * this->n_seq_max, sizeof(llama_seq_id)}, // Strides
+        batch.seq_id[0], // Pointer to the start of the first row's data
+        py::capsule(this, [](void*) {}) // Use 'this' or another non-null pointer for base to indicate ownership/validity tied to PyLlamaBatch
+    );
+}
+
+void PyLlamaBatch::set_sequence_ids(py::array_t<llama_seq_id> seq_ids) {
+    if (!batch.seq_id) {
+         throw std::runtime_error("Batch seq_id buffer is null. Cannot set sequence IDs.");
+    }
+    // Ensure the input is C-contiguous and has the correct type
+    auto seq_ids_cont = seq_ids.cast<py::array_t<llama_seq_id, py::array::c_style | py::array::forcecast>>();
+
+    if (seq_ids_cont.ndim() != 2) {
+        throw std::runtime_error("Sequence IDs array must be 2-dimensional.");
+    }
+    // Check dimensions against the *current* batch.n_tokens and stored n_seq_max
+    // The number of rows in the input must match the current batch.n_tokens
+    if (seq_ids_cont.shape(0) != batch.n_tokens) {
+         throw std::runtime_error("Sequence IDs array rows (" + std::to_string(seq_ids_cont.shape(0)) +
+                                  ") must match current batch.n_tokens (" + std::to_string(batch.n_tokens) + ").");
+    }
+    if (seq_ids_cont.shape(1) > this->n_seq_max) {
+         throw std::runtime_error("Sequence IDs array columns (" + std::to_string(seq_ids_cont.shape(1)) +
+                                  ") exceed batch n_seq_max capacity (" + std::to_string(this->n_seq_max) + ").");
+    }
+
+    auto r = seq_ids_cont.unchecked<2>();
+    for (py::ssize_t i = 0; i < r.shape(0); ++i) { // Iterate up to batch.n_tokens (which == r.shape(0))
+        if (batch.seq_id[i] != nullptr) {
+            // Copy the row data provided in the input array
+            std::memcpy(batch.seq_id[i], r.data(i, 0), r.shape(1) * sizeof(llama_seq_id));
+            // If input has fewer columns than n_seq_max, the remaining seq_ids in the batch buffer for this token are untouched.
+        } else {
+             // This shouldn't happen if llama_batch_init worked correctly
+             throw std::runtime_error("Batch seq_id row pointer is null for token index " + std::to_string(i));
+        }
+    }
+    // This setter copies data based on the input array's shape.
+    // It's crucial that batch.n_tokens was set correctly *before* calling this setter.
+}

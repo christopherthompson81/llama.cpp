@@ -90,4 +90,16 @@ public:
      * @param logits NumPy array of logits flags
      */
     void set_logits(py::array_t<int8_t> logits);
+
+    /**
+     * @brief Get the sequence IDs for each token (as a 2D array view)
+     * @return NumPy array view of shape (n_tokens, n_seq_max)
+     */
+    py::array_t<llama_seq_id> get_sequence_ids() const;
+
+    /**
+     * @brief Set the sequence IDs for each token
+     * @param seq_ids NumPy array of shape (n_tokens, n_seq_max) or compatible
+     */
+    void set_sequence_ids(py::array_t<llama_seq_id> seq_ids);
 };

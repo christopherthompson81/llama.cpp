@@ -62,8 +62,11 @@ PYBIND11_MODULE(llama_cpp, m) {
         .def_property("tokens", &PyLlamaBatch::get_tokens, &PyLlamaBatch::set_tokens)
         .def_property("positions", &PyLlamaBatch::get_positions, &PyLlamaBatch::set_positions)
         .def_property("n_seq_id", &PyLlamaBatch::get_n_seq_id, &PyLlamaBatch::set_n_seq_id)
+        // Expose the new seq_id property using the getter/setter
+        .def_property("seq_id", &PyLlamaBatch::get_sequence_ids, &PyLlamaBatch::set_sequence_ids,
+                      "Sequence IDs for each token (NumPy array, shape: [n_tokens, n_seq_max])")
         .def_property("logits", &PyLlamaBatch::get_logits, &PyLlamaBatch::set_logits);
-    
+
     // Expose LlamaSampler
     py::class_<PyLlamaSampler>(m, "LlamaSampler")
         .def(py::init<>())
