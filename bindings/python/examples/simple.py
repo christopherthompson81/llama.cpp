@@ -51,26 +51,54 @@ def main():
     tokens = model.tokenize(args.prompt)
     n_prompt_tokens = len(tokens)
 
-    print(f"Evaluating prompt token by token...")
+    # Create a reusable batch sized to the context's n_batch
+    # n_batch = context.n_batch # Ideal if available
+    n_batch = 512 # Use a reasonable default or value from context if available
+    batch = model.create_batch(n_batch)
     output_tokens = []
 
-    # Process prompt token by token using decode with batch size 1
-    for i, token in enumerate(tokens):
-        batch = model.create_batch(1) # Create new batch each time
-        # Note: Assigning Python lists directly to batch attributes.
-        # This might fail if the underlying setters expect specific types
-        # or if there's a size mismatch issue even for n_batch=1.
-        batch.tokens = [token]
-        batch.pos = [i]
-        batch.n_seq_id = [1]
-        batch.seq_id = [[0]] # Assuming sequence ID 0
-        batch.logits = [0] # Logits off for prompt processing
+    # --- Prompt Processing ---
+    print(f"Evaluating prompt...")
 
-        decode_result = context.decode(batch)
-        if decode_result != 0:
-            print(f"Warning: context.decode returned {decode_result} for prompt token {i}")
-            return # Stop if prompt decoding fails
-        output_tokens.append(token) # Keep track of processed tokens
+    if n_prompt_tokens > n_batch:
+        print(f"Error: Prompt tokens ({n_prompt_tokens}) exceed batch size ({n_batch}). This example cannot handle prompts longer than n_batch.")
+        return
+
+    # Prepare arrays for the prompt
+    prompt_tokens_np = np.array(tokens, dtype=np.int32)
+    prompt_pos_np = np.arange(0, n_prompt_tokens, dtype=np.int32)
+    prompt_n_seq_id_np = np.array([1] * n_prompt_tokens, dtype=np.int32)
+    # seq_id format: list of lists, one inner list per token
+    prompt_seq_id_list = [[0]] * n_prompt_tokens 
+    prompt_logits_np = np.array([0] * n_prompt_tokens, dtype=np.int8) # Logits off
+
+    # Set batch size *before* assigning arrays
+    batch.n_tokens = n_prompt_tokens
+
+    # Use setters to populate the batch
+    # Wrap in try-except as seq_id format might be tricky
+    try:
+        batch.tokens = prompt_tokens_np
+        batch.pos = prompt_pos_np
+        batch.n_seq_id = prompt_n_seq_id_np
+        batch.seq_id = prompt_seq_id_list # Assign list of lists
+        batch.logits = prompt_logits_np
+    except Exception as e:
+        print(f"Error setting prompt batch properties: {e}")
+        print("Check if the format for batch.seq_id is correct (e.g., list of lists vs flat array).")
+        return
+
+    # Decode the prompt batch
+    decode_result = context.decode(batch)
+    # Check decode result (expect 0 for success, 1 for KV cache full)
+    if decode_result != 0 and decode_result != 1:
+        print(f"Error: context.decode returned {decode_result} for prompt.")
+        return
+    elif decode_result == 1:
+         print(f"Warning: KV cache is full after processing prompt ({n_prompt_tokens} tokens). Generation might fail or be truncated.")
+
+
+    output_tokens.extend(tokens) # Add prompt tokens to output
 
     print(f"Generating {args.max_tokens} tokens...")
 
@@ -93,22 +121,37 @@ def main():
         if next_token == model.vocab.eos_token:
             break
 
-        # Prepare a new batch for the single next token
-        batch = model.create_batch(1) # Create new batch each time
-        current_pos = n_prompt_tokens + i # Position of the token we are about to decode
+        # Prepare arrays for the single next token
+        current_pos = n_prompt_tokens + i
+        token_np = np.array([next_token], dtype=np.int32)
+        pos_np = np.array([current_pos], dtype=np.int32)
+        n_seq_id_np = np.array([1], dtype=np.int32)
+        seq_id_list = [[0]] # List of lists for single token
+        logits_np = np.array([1], dtype=np.int8) # Logits on for prediction
 
-        # Populate the new batch
-        batch.tokens = [next_token]
-        batch.pos = [current_pos]
-        batch.n_seq_id = [1]
-        batch.seq_id = [[0]] # Assuming sequence ID 0
-        batch.logits = [1] # Logits on for prediction
+        # Set batch size *before* assigning arrays
+        batch.n_tokens = 1
 
-        # Decode the single-token batch to update the context
+        # Use setters to populate the batch for the single token
+        try:
+            batch.tokens = token_np
+            batch.pos = pos_np
+            batch.n_seq_id = n_seq_id_np
+            batch.seq_id = seq_id_list
+            batch.logits = logits_np
+        except Exception as e:
+            print(f"Error setting generation batch properties: {e}")
+            break
+
+        # Decode the single-token batch
         decode_result = context.decode(batch)
-        if decode_result != 0:
-            print(f"Warning: context.decode returned {decode_result} during generation")
+        # Check decode result (expect 0 for success, 1 for KV cache full)
+        if decode_result != 0 and decode_result != 1:
+            print(f"Error: context.decode returned {decode_result} during generation.")
             break # Stop generation if decode fails
+        elif decode_result == 1:
+            print(f"Warning: KV cache became full during generation at token {i+1}. Stopping.")
+            break # Stop generation if KV cache is full
 
     # Detokenize only the generated part (output_tokens now includes prompt)
     generated_tokens = output_tokens[n_prompt_tokens:]
