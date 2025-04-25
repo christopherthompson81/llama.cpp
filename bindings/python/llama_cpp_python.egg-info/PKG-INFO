@@ -1,0 +1,98 @@
+Metadata-Version: 2.4
+Name: llama-cpp-python
+Version: 0.1.0
+Summary: Python bindings for llama.cpp
+Home-page: https://github.com/ggml-org/llama.cpp
+Author: llama.cpp Contributors
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.20.0
+Dynamic: author
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+# llama-cpp-python
+
+Python bindings for [llama.cpp](https://github.com/ggml-org/llama.cpp), a C/C++ implementation of LLaMA.
+
+## Installation
+
+### From PyPI
+
+```bash
+pip install llama-cpp-python
+```
+
+### From Source
+
+```bash
+git clone https://github.com/ggml-org/llama.cpp.git
+cd llama.cpp
+pip install -e bindings/python
+```
+
+## Usage
+
+### Basic Example
+
+```python
+from llama_cpp import LlamaModel, LlamaContext
+
+# Load the model
+model = LlamaModel("path/to/model.gguf")
+
+# Create a context
+context = model.create_context()
+
+# Generate text
+prompt = "Once upon a time"
+tokens = model.tokenize(prompt)
+output = context.generate(tokens, max_tokens=100)
+
+# Print the result
+print(model.detokenize(output))
+```
+
+### Chat Example
+
+```python
+from llama_cpp import LlamaModel, LlamaContext
+
+# Load the model
+model = LlamaModel("path/to/model.gguf")
+
+# Create a context
+context = model.create_context()
+
+# Create a chat session
+messages = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hello, who are you?"}
+]
+
+# Apply chat template
+prompt = model.apply_chat_template(messages)
+
+# Generate response
+tokens = model.tokenize(prompt)
+output_tokens = context.generate(tokens, max_tokens=200)
+output_text = model.detokenize(output_tokens[len(tokens):])
+
+print(f"Assistant: {output_text}")
+```
+
+## API Reference
+
+See the [API documentation](https://github.com/ggml-org/llama.cpp/tree/master/bindings/python) for detailed information on all available classes and methods.
+
+## License
+
+This project is licensed under the same license as llama.cpp - MIT.

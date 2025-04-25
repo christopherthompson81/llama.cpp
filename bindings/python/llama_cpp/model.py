@@ -33,16 +33,16 @@ class LlamaModel:
         """
         from .context import LlamaContext
         return LlamaContext(self, kwargs)
-        
+
     def create_batch(self, n_tokens: int, embd: int = 0, n_seq_max: int = 1) -> LlamaBatch:
         """
         Create a new batch for token processing.
-        
+
         Args:
             n_tokens: Maximum number of tokens in the batch
             embd: Embedding dimension (0 for token-based batch)
             n_seq_max: Maximum number of sequences
-            
+
         Returns:
             A new LlamaBatch instance
         """

@@ -2,23 +2,23 @@
 import argparse
 import os
 import sys
+import numpy as np
+from llama_cpp import LlamaModel
 
 # Add the parent directory to the path so we can import the llama_cpp package
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import numpy as np
-from llama_cpp import LlamaModel
 
 def sample_token(logits, temperature=0.8, top_p=0.95, top_k=40):
     """Simple token sampling function"""
     # Apply temperature
     if temperature > 0:
         logits = logits / temperature
-    
+
     # Convert to probabilities
     probs = np.exp(logits - np.max(logits))
     probs = probs / np.sum(probs)
-    
+
     # Apply top-k
     if top_k > 0:
         indices = np.argsort(-probs)[:top_k]
@@ -27,8 +27,9 @@ def sample_token(logits, temperature=0.8, top_p=0.95, top_k=40):
         idx = np.random.choice(indices, p=probs_topk)
     else:
         idx = np.random.choice(len(probs), p=probs)
-    
+
     return idx
+
 
 def main():
     parser = argparse.ArgumentParser(description="Simple example of using llama-cpp-python")
@@ -43,10 +44,10 @@ def main():
 
     print(f"Loading model from {args.model}...")
     model = LlamaModel(args.model)
-    
-    print(f"Creating context...")
+
+    print("Creating context...")
     context = model.create_context(n_ctx=2048, seed=args.seed)
-    
+
     print(f"Tokenizing prompt: {args.prompt}")
     tokens = model.tokenize(args.prompt)
     n_prompt_tokens = len(tokens)
@@ -58,7 +59,7 @@ def main():
     output_tokens = []
 
     # --- Prompt Processing ---
-    print(f"Evaluating prompt...")
+    print("Evaluating prompt...")
 
     if n_prompt_tokens > n_batch:
         print(f"Error: Prompt tokens ({n_prompt_tokens}) exceed batch size ({n_batch}). This example cannot handle prompts longer than n_batch.")
@@ -69,7 +70,7 @@ def main():
     prompt_pos_np = np.arange(0, n_prompt_tokens, dtype=np.int32)
     prompt_n_seq_id_np = np.array([1] * n_prompt_tokens, dtype=np.int32)
     # seq_id format: list of lists, one inner list per token
-    prompt_seq_id_list = [[0]] * n_prompt_tokens 
+    prompt_seq_id_list = [[0]] * n_prompt_tokens
     prompt_logits_np = np.array([0] * n_prompt_tokens, dtype=np.int8) # Logits off
 
     # Set batch size *before* assigning arrays
@@ -95,12 +96,12 @@ def main():
         print(f"Error: context.decode returned {decode_result} for prompt.")
         return
     elif decode_result == 1:
-         print(f"Warning: KV cache is full after processing prompt ({n_prompt_tokens} tokens). Generation might fail or be truncated.")
-
+        print(f"Warning: KV cache is full after processing prompt ({n_prompt_tokens} tokens). Generation might fail or be truncated.")
 
     output_tokens.extend(tokens) # Add prompt tokens to output
 
     print(f"Generating {args.max_tokens} tokens...")
+    print(model.detokenize(output_tokens), end="")
 
     # Generation loop
     for i in range(args.max_tokens):
@@ -116,9 +117,10 @@ def main():
 
         # Add the new token to our output
         output_tokens.append(next_token)
+        print(model.detokenize([next_token]), end="")
 
         # Stop if we generate EOS
-        if next_token == model.vocab.eos_token:
+        if next_token == model._vocab.eos_token:
             break
 
         # Prepare arrays for the single next token
@@ -150,8 +152,9 @@ def main():
             print(f"Error: context.decode returned {decode_result} during generation.")
             break # Stop generation if decode fails
         elif decode_result == 1:
-            print(f"Warning: KV cache became full during generation at token {i+1}. Stopping.")
-            break # Stop generation if KV cache is full
+            pass
+            # print(f"Warning: KV cache became full during generation at token {i+1}. Stopping.")
+            # break # Stop generation if KV cache is full
 
     # Detokenize only the generated part (output_tokens now includes prompt)
     generated_tokens = output_tokens[n_prompt_tokens:]
@@ -159,8 +162,7 @@ def main():
 
     print("\nGenerated text:")
     print(f"{args.prompt}{generated_text}")
-        
-    
+
     # Print some model information
     print("\nModel information:")
     print(f"  Embedding size: {model.n_embd}")
@@ -168,6 +170,7 @@ def main():
     print(f"  Num layers: {model.n_layer}")
     print(f"  Num heads: {model.n_head}")
     print(f"  Vocab size: {model.vocab_size}")
+
 
 if __name__ == "__main__":
     main()

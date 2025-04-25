@@ -83,7 +83,7 @@ py::array_t<float> PyLlamaContext::get_logits() {
         {n_vocab},                  // Shape
         {sizeof(float)},            // Strides
         logits,                     // Data pointer
-        py::capsule(nullptr, [](void*) {})  // No ownership transfer
+        py::capsule(logits, [](void*) {})  // No ownership transfer
     );
 }
 
