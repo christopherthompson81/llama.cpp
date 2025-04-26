@@ -1,51 +1,11 @@
 #include "llama-quant.h"
 
-#include "llama-impl.h"
-#include "llama-model.h"
-#include "llama-model-loader.h"
-
-#include <algorithm>
-#include <cmath>
-#include <cstring>
-#include <cinttypes>
-#include <fstream>
-#include <mutex>
-#include <thread>
-#include <unordered_map>
-
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
         file.write(&zero, 1);
     }
 }
-
-struct quantize_state_impl {
-    const llama_model                 & model;
-    const llama_model_quantize_params * params;
-
-    int n_attention_wv = 0;
-    int n_ffn_down     = 0;
-    int n_ffn_gate     = 0;
-    int n_ffn_up       = 0;
-    int i_attention_wv = 0;
-    int i_ffn_down     = 0;
-    int i_ffn_gate     = 0;
-    int i_ffn_up       = 0;
-
-    int n_k_quantized = 0;
-    int n_fallback    = 0;
-
-    bool has_imatrix = false;
-
-    // used to figure out if a model shares tok_embd with the output weight
-    bool has_output = false;
-
-    quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params)
-        : model(model)
-        , params(params)
-        {}
-};
 
 static void llama_tensor_dequantize_impl(
     struct ggml_tensor * tensor, std::vector<no_init<float>> & output, std::vector<std::thread> & workers,
