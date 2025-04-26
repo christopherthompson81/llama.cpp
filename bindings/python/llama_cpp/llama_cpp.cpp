@@ -54,7 +54,8 @@ PYBIND11_MODULE(llama_cpp, m) {
         .def("get_logits", &PyLlamaContext::get_logits)
         .def("get_embeddings", &PyLlamaContext::get_embeddings)
         .def("kv_cache_clear", &PyLlamaContext::kv_cache_clear)
-        .def("set_n_threads", &PyLlamaContext::set_n_threads);
+        .def("set_n_threads", &PyLlamaContext::set_n_threads)
+        .def("get_context_ptr", &PyLlamaContext::get_context_ptr);
     
     // Expose LlamaBatch
     py::class_<PyLlamaBatch>(m, "LlamaBatch")
@@ -70,6 +71,7 @@ PYBIND11_MODULE(llama_cpp, m) {
     // Expose LlamaSampler
     py::class_<PyLlamaSampler>(m, "LlamaSampler")
         .def(py::init<>())
+        .def("add_greedy", &PyLlamaSampler::add_greedy)
         .def("add_top_k", &PyLlamaSampler::add_top_k)
         .def("add_top_p", &PyLlamaSampler::add_top_p)
         .def("add_temperature", &PyLlamaSampler::add_temperature)

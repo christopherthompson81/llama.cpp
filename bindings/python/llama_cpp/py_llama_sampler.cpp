@@ -14,6 +14,11 @@ PyLlamaSampler::~PyLlamaSampler() {
     }
 }
 
+// llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+void PyLlamaSampler::add_greedy() {
+    llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
+}
+
 void PyLlamaSampler::add_top_k(int k) {
     llama_sampler_chain_add(sampler, llama_sampler_init_top_k(k));
 }

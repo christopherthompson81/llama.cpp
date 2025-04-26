@@ -6,16 +6,7 @@ from .batch import LlamaBatch
 
 
 class LlamaContext:
-    """High-level Python wrapper for llama.cpp context."""
-
     def __init__(self, model: LlamaModel, params: Dict[str, Any]):
-        """
-        Initialize a LlamaContext.
-
-        Args:
-            model: The LlamaModel to use
-            params: Context parameters
-        """
         self._model = model
 
         # Set default parameters if not provided
@@ -32,47 +23,18 @@ class LlamaContext:
         self._last_tokens = []
 
     def decode(self, batch: LlamaBatch) -> bool:
-        """
-        Decode a batch of tokens.
-
-        Args:
-            batch: The batch to decode
-
-        Returns:
-            True if successful, False otherwise
-        """
         return self._ctx.decode(batch._batch)
 
     def get_logits(self) -> np.ndarray:
-        """
-        Get the logits from the last forward pass.
-
-        Returns:
-            Numpy array of logits
-        """
         return self._ctx.get_logits()
 
     def get_embeddings(self) -> np.ndarray:
-        """
-        Get the embeddings from the last forward pass.
-
-        Returns:
-            Numpy array of embeddings
-        """
         return self._ctx.get_embeddings()
 
     def clear_kv_cache(self) -> None:
-        """Clear the key-value cache."""
         self._ctx.kv_cache_clear()
 
     def set_n_threads(self, n_threads: int, n_threads_batch: Optional[int] = None) -> None:
-        """
-        Set the number of threads to use.
-
-        Args:
-            n_threads: Number of threads for inference
-            n_threads_batch: Number of threads for batch processing (defaults to n_threads)
-        """
         if n_threads_batch is None:
             n_threads_batch = n_threads
         self._ctx.set_n_threads(n_threads, n_threads_batch)
@@ -84,20 +46,6 @@ class LlamaContext:
                  top_p: float = 0.95,
                  top_k: int = 40,
                  stop_tokens: Optional[List[int]] = None) -> List[int]:
-        """
-        Generate text from a prompt.
-
-        Args:
-            tokens: Input token IDs
-            max_tokens: Maximum number of tokens to generate
-            temperature: Sampling temperature (0.0 = greedy)
-            top_p: Top-p sampling parameter
-            top_k: Top-k sampling parameter
-            stop_tokens: List of token IDs that will stop generation if encountered
-
-        Returns:
-            List of generated token IDs (including the input tokens)
-        """
         from .sampler import LlamaSampler
 
         # Create a batch for the input tokens

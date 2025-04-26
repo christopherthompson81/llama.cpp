@@ -3,7 +3,7 @@ import argparse
 import os
 import sys
 import numpy as np
-from llama_cpp import LlamaModel
+from llama_cpp import LlamaModel, LlamaSampler, LlamaContext
 
 # Add the parent directory to the path so we can import the llama_cpp package
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -46,7 +46,8 @@ def main():
     model = LlamaModel(args.model)
 
     print("Creating context...")
-    context = model.create_context(n_ctx=2048, seed=args.seed)
+    # context = model.create_context(n_ctx=2048, seed=args.seed)
+    context = LlamaContext(model, {"n_ctx": 2048})
 
     print(f"Tokenizing prompt: {args.prompt}")
     tokens = model.tokenize(args.prompt)
@@ -57,6 +58,15 @@ def main():
     n_batch = 512 # Use a reasonable default or value from context if available
     batch = model.create_batch(n_batch)
     output_tokens = []
+
+    # initialize the sampler
+    # auto sparams = llama_sampler_chain_default_params();
+    sampler = LlamaSampler()
+    # sparams.no_perf = false;
+    # sampler._sampler.params.no_perf = False
+    # llama_sampler * smpl = llama_sampler_chain_init(sparams);
+    # llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    sampler.add_greedy()
 
     # --- Prompt Processing ---
     print("Evaluating prompt...")
@@ -108,12 +118,7 @@ def main():
         # Get logits for the next token prediction
         logits = context.get_logits()
         # Sample the next token
-        next_token = sample_token(
-            logits,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            top_k=args.top_k
-        )
+        next_token = sampler.sample(context, logits)
 
         # Add the new token to our output
         output_tokens.append(next_token)

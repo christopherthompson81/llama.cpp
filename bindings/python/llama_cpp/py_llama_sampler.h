@@ -17,6 +17,7 @@ public:
     PyLlamaSampler();
     ~PyLlamaSampler();
 
+    void add_greedy();
     void add_top_k(int k);
     void add_top_p(float p);
     void add_temperature(float temp);

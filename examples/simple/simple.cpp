@@ -105,7 +105,8 @@ int main(int argc, char ** argv) {
 
     // initialize the context
 
-    llama_context_params ctx_params = llama_context_default_params();
+    llama_context_params ctx_params =
+    
     // n_ctx is the context size
     ctx_params.n_ctx = n_prompt + n_predict - 1;
     // n_batch is the maximum number of tokens that can be processed in a single call to llama_decode
