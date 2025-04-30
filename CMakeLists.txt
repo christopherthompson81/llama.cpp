@@ -185,6 +185,19 @@ endif()
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
     add_subdirectory(examples)
     add_subdirectory(pocs)
+    
+    # Check if Qt5 is available for GUI examples
+    find_package(Qt5 COMPONENTS Core Widgets Charts QUIET)
+    find_package(SQLite3 QUIET)
+    
+    if(Qt5_FOUND AND SQLite3_FOUND)
+        option(LLAMA_BUILD_EXAMPLES_GUI "Build GUI examples" ON)
+        if(LLAMA_BUILD_EXAMPLES_GUI)
+            add_subdirectory(examples/gui)
+        endif()
+    else()
+        message(STATUS "Qt5 or SQLite3 not found, GUI examples will not be built")
+    endif()
 endif()
 
 #
