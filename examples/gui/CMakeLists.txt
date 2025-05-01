@@ -3,7 +3,7 @@ add_executable(${TARGET} quantization_analysis.cpp)
 install(TARGETS ${TARGET} RUNTIME)
 
 # Find required packages
-#find_package(Qt5 COMPONENTS Core Widgets Charts REQUIRED)
+#find_package(Qt6 COMPONENTS Core Widgets Charts REQUIRED)
 #find_package(SQLite3 REQUIRED)
 
 # Include directories
@@ -22,9 +22,9 @@ target_link_libraries(${TARGET}
     llama
     common
     ${CMAKE_THREAD_LIBS_INIT}
-    Qt5::Core
-    Qt5::Widgets
-    Qt5::Charts
+    Qt6::Core
+    Qt6::Widgets
+    Qt6::Charts
     SQLite::SQLite3
 )
 
