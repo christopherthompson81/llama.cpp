@@ -151,3 +151,4 @@ gguf_quantization_analysis_tool/quantization_stats.db
 gguf_quantization_analysis_tool/wiki.train.raw
 gguf_quantization_analysis_tool/quantization_stats.db-journal
 *.aider*
+aider*
