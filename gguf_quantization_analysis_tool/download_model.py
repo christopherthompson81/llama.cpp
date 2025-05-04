@@ -33,7 +33,7 @@ class DownloadWorker(QThread):
     to avoid blocking the GUI.
     """
     initial_files_signal = Signal(list) # Emits the full list of files upfront
-    progress_signal = Signal(str, int, int) # filename, percentage (0-100), size_in_mib
+    progress_signal = Signal(str, float, int) # filename, percentage (0-100), size_in_mib
     new_file_signal = Signal(str, int) # filename, size_in_mib
     finished_signal = Signal(str, bool) # message, is_error
     status_update = Signal(str) # Intermediate status messages
@@ -345,7 +345,7 @@ class DownloadWorker(QThread):
 
                                 if should_update:
                                     # Calculate percentage and MiB for display
-                                    percentage = min(100, int((current_bytes * 100) / total_size)) if total_size > 0 else 0
+                                    percentage = min(100.0, (current_bytes * 100.0) / total_size) if total_size > 0 else 0.0
                                     size_mib = int(current_bytes / (1024 * 1024))
 
                                     # Emit progress with percentage and MiB values
@@ -756,7 +756,7 @@ class MainWindow(QMainWindow):
                     pbar.setMaximum(100)
                 pbar.setValue(100) # Set to 100%
 
-    @Slot(str, int, int) # Receives filename, percentage (0-100), and size_in_mib
+    @Slot(str, float, int) # Receives filename, percentage (0-100), and size_in_mib
     def update_progress_bar(self, filename, percentage, size_mib):
         """Updates the value of a specific progress bar during download."""
         if filename in self.progress_bars:
@@ -767,8 +767,8 @@ class MainWindow(QMainWindow):
             if pbar.maximum() != 100:
                 pbar.setMaximum(100)
 
-            # Set the value directly from the percentage we received
-            pbar.setValue(percentage)
+            # Set the value directly from the percentage we received (convert to int for setValue)
+            pbar.setValue(int(percentage))
 
             # Update the format based on state
             if percentage < 100:
