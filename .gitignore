@@ -152,3 +152,5 @@ gguf_quantization_analysis_tool/wiki.train.raw
 gguf_quantization_analysis_tool/quantization_stats.db-journal
 *.aider*
 aider*
+temp/text1.txt
+temp/text2.txt
