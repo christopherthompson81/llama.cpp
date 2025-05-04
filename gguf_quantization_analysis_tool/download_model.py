@@ -653,7 +653,7 @@ class MainWindow(QMainWindow):
 
         pbar = QProgressBar()
         pbar.setMinimum(0)
-        pbar.setMaximum(100)  # Always use 100 for percentage-based display
+        pbar.setMaximum(10000)  # Use 10000 for 2 decimal precision (0.01% increments)
         pbar.setValue(0)  # Start at 0
         pbar.setTextVisible(True)
         pbar.setFormat(initial_format)
@@ -741,9 +741,9 @@ class MainWindow(QMainWindow):
             label.setText(f"{display_name}{size_str}")
 
             # Update progress bar state to 100%
-            if pbar.maximum() != 100:
-                pbar.setMaximum(100)
-            pbar.setValue(100) # Set to 100%
+            if pbar.maximum() != 10000:
+                pbar.setMaximum(10000)
+            pbar.setValue(10000) # Set to 100%
             pbar.setFormat("Cached")
         else:
             logging.warning(f"mark_file_as_cached: Progress bar for '{filename}' not found.")
@@ -751,10 +751,10 @@ class MainWindow(QMainWindow):
             self._create_progress_bar_widget(filename, size_mib, "Cached")
             if filename in self.progress_bars:
                 pbar = self.progress_bars[filename]['bar']
-                # Ensure progress bar is set to use percentage (0-100)
-                if pbar.maximum() != 100:
-                    pbar.setMaximum(100)
-                pbar.setValue(100) # Set to 100%
+                # Ensure progress bar is set to use percentage (0-10000)
+                if pbar.maximum() != 10000:
+                    pbar.setMaximum(10000)
+                pbar.setValue(10000) # Set to 100%
 
     @Slot(str, float, int) # Receives filename, percentage (0-100), and size_in_mib
     def update_progress_bar(self, filename, percentage, size_mib):
@@ -764,11 +764,12 @@ class MainWindow(QMainWindow):
             pbar = pbar_info['bar']
 
             # Ensure progress bar is set to use percentage (0-100)
-            if pbar.maximum() != 100:
-                pbar.setMaximum(100)
+            if pbar.maximum() != 10000:
+                pbar.setMaximum(10000)
 
             # Set the value directly from the percentage we received (convert to int for setValue)
-            pbar.setValue(int(percentage))
+            # Multiply by 100 to get 2 decimal precision (e.g., 25.37% becomes 2537)
+            pbar.setValue(int(percentage * 100))
 
             # Update the format based on state
             if percentage < 100:
