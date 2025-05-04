@@ -772,8 +772,8 @@ class MainWindow(QMainWindow):
 
             # Update the format based on state
             if percentage < 100:
-                # Show downloading with MiB
-                pbar.setFormat(f"Downloading: {percentage}% ({size_mib:.2f} MiB)")
+                # Show downloading with MiB and percentage with 2 decimal places
+                pbar.setFormat(f"Downloading: {percentage:.2f}% ({size_mib:.2f} MiB)")
             else:
                 # Mark as complete if 100%
                 if pbar.format() != "Complete":
@@ -783,7 +783,7 @@ class MainWindow(QMainWindow):
             # Handle missing progress bar case (should be less likely now)
             logging.warning(f"update_progress_bar: Progress bar for '{filename}' not found during update. Attempting to create.")
             # Create with appropriate state based on percentage and size_mib
-            initial_format = f"Downloading: {percentage}% ({size_mib:.2f} MiB)" if percentage < 100 else "Complete"
+            initial_format = f"Downloading: {percentage:.2f}% ({size_mib:.2f} MiB)" if percentage < 100 else "Complete"
             self._create_progress_bar_widget(filename, size_mib, initial_format)
             # Set the value directly after creating
             if filename in self.progress_bars:
