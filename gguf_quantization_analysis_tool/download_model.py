@@ -114,6 +114,9 @@ class DownloadWorker(QThread):
             repo_files = self._get_repo_files()
             if not self._is_running: return # Check stop flag
 
+            # Emit the list of subdirectories discovered
+            self.subdirs_discovered_signal.emit(sorted(list(self._subdirectories)))
+            
             # Emit the list of filenames to populate UI initially
             self.initial_files_signal.emit(list(repo_files.keys()))
             if not self._is_running: return # Check stop flag
