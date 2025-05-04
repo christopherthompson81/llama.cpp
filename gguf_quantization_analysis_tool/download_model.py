@@ -19,7 +19,7 @@ import threading # Added for periodic save timer
 
 from PySide6.QtCore import QThread, Signal, Slot, Qt # Import QMetaType
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+    QApplication, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 )
@@ -68,30 +68,30 @@ class DownloadWorker(QThread):
             # Extract filenames and sizes from the 'siblings' list
             files = {}
             self._subdirectories = set()
-            
+
             for file_info in repo_info.get("siblings", []):
                 filename = file_info.get("rfilename")
                 size = file_info.get("size") # Size might be None for LFS files not downloaded yet? API docs unclear.
-                
+
                 if filename:
                     # Extract subdirectory if present
                     if '/' in filename:
                         subdir = filename.split('/')[0]
                         self._subdirectories.add(subdir)
-                    
+
                     # Apply subdirectory filter if specified
                     if self.subdir_filter and not filename.startswith(f"{self.subdir_filter}/"):
                         # Skip files not in the specified subdirectory
                         continue
-                        
+
                     # Store size, default to -1 if not available (indicates unknown size)
                     files[filename] = size if size is not None else -1
-            
+
             # Emit signal with discovered subdirectories
             self.status_update.emit(f"Found {len(self._subdirectories)} subdirectories in repository")
-            
-            logging.info(f"Found {len(files)} files in repository via API" + 
-                         (f" (filtered to subdirectory '{self.subdir_filter}')" if self.subdir_filter else ""))
+
+            logging.info(f"Found {len(files)} files in repository via API"
+                         + (f" (filtered to subdirectory '{self.subdir_filter}')" if self.subdir_filter else ""))
             return files
         except requests.exceptions.RequestException as e:
             logging.error(f"Error fetching repo info from API: {e}")
@@ -116,7 +116,7 @@ class DownloadWorker(QThread):
 
             # Emit the list of subdirectories discovered
             self.subdirs_discovered_signal.emit(sorted(list(self._subdirectories)))
-            
+
             # Emit the list of filenames to populate UI initially
             self.initial_files_signal.emit(list(repo_files.keys()))
             if not self._is_running: return # Check stop flag
@@ -451,7 +451,7 @@ class MainWindow(QMainWindow):
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
-        
+
         # Flag to prevent circular updates between text field and dropdown
         self.updating_subdir_ui = False
 
@@ -468,12 +468,12 @@ class MainWindow(QMainWindow):
         self.hf_token_input.setPlaceholderText("Optional: Your Hugging Face token (for gated models)")
         self.hf_token_input.setEchoMode(QLineEdit.EchoMode.Password) # Hide token
         input_layout.addRow("Hugging Face Token:", self.hf_token_input)
-        
+
         # Subdirectory filter
         self.subdir_filter_input = QLineEdit()
         self.subdir_filter_input.setPlaceholderText("Optional: Filter by subdirectory (e.g., 'ggml' or 'gguf')")
         input_layout.addRow("Subdirectory Filter:", self.subdir_filter_input)
-        
+
         # Subdirectory dropdown (will be populated after fetching repo info)
         self.subdir_combo = QComboBox()
         self.subdir_combo.setEnabled(False)  # Initially disabled until repo is queried
@@ -826,7 +826,7 @@ class MainWindow(QMainWindow):
         logging.debug("Download thread finished signal received.")
         self.download_button.setEnabled(True) # Re-enable button
         self.download_thread = None # Clear thread reference
-        
+
     @Slot(list)
     def update_subdirectory_dropdown(self, subdirectories):
         """Updates the subdirectory dropdown with discovered directories."""
@@ -834,14 +834,14 @@ class MainWindow(QMainWindow):
         try:
             self.subdir_combo.clear()
             self.subdir_combo.setEnabled(True)
-            
+
             # Add "All files" option first
             self.subdir_combo.addItem("All files")
-            
+
             # Add each subdirectory
             for subdir in subdirectories:
                 self.subdir_combo.addItem(subdir)
-                
+
             # Select the current filter if it exists in the list
             current_filter = self.subdir_filter_input.text().strip()
             if current_filter:
@@ -856,13 +856,13 @@ class MainWindow(QMainWindow):
                 self.subdir_combo.setCurrentIndex(0)
         finally:
             self.updating_subdir_ui = False
-    
+
     @Slot(str)
     def on_subdir_selected(self, subdir):
         """Handles selection from the subdirectory dropdown."""
         if self.updating_subdir_ui:
             return  # Avoid circular updates
-            
+
         self.updating_subdir_ui = True
         try:
             if subdir == "All files":
