@@ -474,12 +474,17 @@ class MainWindow(QMainWindow):
         self.subdir_filter_input.setPlaceholderText("Optional: Filter by subdirectory (e.g., 'ggml' or 'gguf')")
         input_layout.addRow("Subdirectory Filter:", self.subdir_filter_input)
 
-        # Subdirectory dropdown (will be populated after fetching repo info)
+        # Subdirectory dropdown with fetch button
+        subdir_layout = QHBoxLayout()
         self.subdir_combo = QComboBox()
         self.subdir_combo.setEnabled(False)  # Initially disabled until repo is queried
         self.subdir_combo.addItem("Loading subdirectories...")
         self.subdir_combo.currentTextChanged.connect(self.on_subdir_selected)
-        input_layout.addRow("Available Subdirs:", self.subdir_combo)
+        self.fetch_button = QPushButton("Fetch")
+        self.fetch_button.clicked.connect(self.fetch_subdirectories)
+        subdir_layout.addWidget(self.subdir_combo)
+        subdir_layout.addWidget(self.fetch_button)
+        input_layout.addRow("Available Subdirs:", subdir_layout)
 
         self.local_dir_layout = QHBoxLayout()
         self.local_dir_input = QLineEdit()
@@ -862,7 +867,7 @@ class MainWindow(QMainWindow):
         """Handles selection from the subdirectory dropdown."""
         if self.updating_subdir_ui:
             return  # Avoid circular updates
-
+            
         self.updating_subdir_ui = True
         try:
             if subdir == "All files":
@@ -873,6 +878,60 @@ class MainWindow(QMainWindow):
                 self.subdir_filter_input.setText(subdir)
         finally:
             self.updating_subdir_ui = False
+            
+    @Slot()
+    def fetch_subdirectories(self):
+        """Fetches subdirectories without starting a full download."""
+        repo_id = self.repo_id_input.text().strip()
+        
+        # Input validation
+        if not repo_id:
+            QMessageBox.warning(self, "Input Error", "Please enter a Hugging Face Repo ID.")
+            return
+            
+        # Get token (optional, for gated models)
+        hf_token = self.hf_token_input.text().strip() or None
+        token_to_use = hf_token or os.environ.get("HF_TOKEN")  # Check env var as fallback
+        
+        # Update UI
+        self.update_status(f"Status: Fetching subdirectories for {repo_id}...")
+        self.fetch_button.setEnabled(False)
+        self.subdir_combo.clear()
+        self.subdir_combo.addItem("Fetching...")
+        
+        # Create a worker just for fetching subdirectories
+        fetch_worker = DownloadWorker(repo_id, "", token_to_use)
+        fetch_worker.status_update.connect(self.update_status)
+        fetch_worker.subdirs_discovered_signal.connect(self.update_subdirectory_dropdown)
+        fetch_worker.finished_signal.connect(lambda msg, is_error: self.fetch_button.setEnabled(True))
+        
+        # Override run method to only fetch subdirectories
+        def fetch_only_run():
+            if not fetch_worker._is_running:
+                return
+                
+            try:
+                # Only get repo files to discover subdirectories
+                fetch_worker.status_update.emit(f"Listing subdirectories in {fetch_worker.repo_id} via API...")
+                repo_files = fetch_worker._get_repo_files()
+                
+                if not fetch_worker._is_running:
+                    return
+                    
+                # Emit the list of subdirectories discovered
+                fetch_worker.subdirs_discovered_signal.emit(sorted(list(fetch_worker._subdirectories)))
+                fetch_worker.status_update.emit(f"Found {len(fetch_worker._subdirectories)} subdirectories in repository")
+                fetch_worker.finished_signal.emit("Subdirectory fetch complete", False)
+                
+            except (ConnectionError, ValueError, RuntimeError) as e:
+                logging.error(f"Failed to get subdirectories: {e}")
+                if fetch_worker._is_running:
+                    fetch_worker.status_update.emit(f"Error fetching subdirectories: {e}")
+                    fetch_worker.finished_signal.emit(f"Error fetching subdirectories: {e}", True)
+        
+        # Replace the run method with our custom one
+        fetch_worker.run = fetch_only_run
+        fetch_worker.start()
 
     def closeEvent(self, event):
         """Handles the window closing event."""
