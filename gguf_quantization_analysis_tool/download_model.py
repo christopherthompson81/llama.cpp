@@ -455,6 +455,10 @@ class MainWindow(QMainWindow):
 
         # Flag to prevent circular updates between text field and dropdown
         self.updating_subdir_ui = False
+        
+        # Keep references to worker threads
+        self.download_thread = None
+        self.branch_fetch_worker = None
 
         # --- Input Area ---
         input_group = QGroupBox("Model Download")
@@ -546,7 +550,6 @@ class MainWindow(QMainWindow):
         self.main_layout.addWidget(self.status_label)
         self.main_layout.setStretchFactor(scroll_area, 1) # Make scroll area take available space
 
-        self.download_thread = None
         # Dictionary holds progress bar and its label {filename: {'bar': QProgressBar, 'label': QLabel}}
         self.progress_bars = {}
 
@@ -967,16 +970,21 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     self.error_signal.emit(str(e))
         
+        # Clean up any existing worker
+        if self.branch_fetch_worker and self.branch_fetch_worker.isRunning():
+            self.branch_fetch_worker.quit()
+            self.branch_fetch_worker.wait()
+        
         # Create and start the worker
-        branch_worker = BranchFetchWorker(repo_id, token_to_use)
+        self.branch_fetch_worker = BranchFetchWorker(repo_id, token_to_use)
         
         # Connect signals
-        branch_worker.branches_signal.connect(self.update_branch_dropdown)
-        branch_worker.error_signal.connect(lambda msg: self.handle_branch_fetch_error(msg))
-        branch_worker.finished.connect(lambda: self.fetch_branches_button.setEnabled(True))
+        self.branch_fetch_worker.branches_signal.connect(self.update_branch_dropdown)
+        self.branch_fetch_worker.error_signal.connect(lambda msg: self.handle_branch_fetch_error(msg))
+        self.branch_fetch_worker.finished.connect(lambda: self.fetch_branches_button.setEnabled(True))
         
         # Start the worker
-        branch_worker.start()
+        self.branch_fetch_worker.start()
     
     def update_branch_dropdown(self, branches):
         """Updates the branch dropdown with fetched branches."""
@@ -1066,19 +1074,38 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Handles the window closing event."""
+        threads_running = False
+        
+        # Check if download thread is running
         if self.download_thread and self.download_thread.isRunning():
+            threads_running = True
+            
+        # Check if branch fetch worker is running
+        if self.branch_fetch_worker and self.branch_fetch_worker.isRunning():
+            threads_running = True
+            
+        if threads_running:
             reply = QMessageBox.question(self, 'Confirm Exit',
-                                         "A download is in progress. Are you sure you want to exit? "
-                                         "The current download may not be properly stopped.",
+                                         "A background task is in progress. Are you sure you want to exit? "
+                                         "The current operation may not be properly stopped.",
                                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                          QMessageBox.StandardButton.No)
 
             if reply == QMessageBox.StandardButton.Yes:
-                logging.info("Attempting to stop download thread on close...")
-                self.download_thread.stop()
-                # Give it a brief moment, though it might not stop snapshot_download
-                if not self.download_thread.wait(500):
-                    logging.warning("Download thread did not stop gracefully.")
+                logging.info("Attempting to stop background threads on close...")
+                
+                # Stop download thread if running
+                if self.download_thread and self.download_thread.isRunning():
+                    self.download_thread.stop()
+                    if not self.download_thread.wait(500):
+                        logging.warning("Download thread did not stop gracefully.")
+                
+                # Stop branch fetch worker if running
+                if self.branch_fetch_worker and self.branch_fetch_worker.isRunning():
+                    self.branch_fetch_worker.quit()
+                    if not self.branch_fetch_worker.wait(500):
+                        logging.warning("Branch fetch worker did not stop gracefully.")
+                
                 event.accept()
             else:
                 event.ignore()
