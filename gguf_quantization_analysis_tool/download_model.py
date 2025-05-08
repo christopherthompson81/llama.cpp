@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 )
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class DownloadWorker(QThread):
@@ -868,7 +868,7 @@ class MainWindow(QMainWindow):
         """Handles selection from the subdirectory dropdown."""
         if self.updating_subdir_ui:
             return  # Avoid circular updates
-            
+
         self.updating_subdir_ui = True
         try:
             if subdir == "All files":
@@ -879,57 +879,56 @@ class MainWindow(QMainWindow):
                 self.subdir_filter_input.setText(subdir)
         finally:
             self.updating_subdir_ui = False
-            
+
     @Slot()
     def fetch_subdirectories(self):
         """Fetches subdirectories without starting a full download."""
         repo_id = self.repo_id_input.text().strip()
-        
+
         # Input validation
         if not repo_id:
             QMessageBox.warning(self, "Input Error", "Please enter a Hugging Face Repo ID.")
             return
-            
+
         # Get token (optional, for gated models)
         hf_token = self.hf_token_input.text().strip() or None
         token_to_use = hf_token or os.environ.get("HF_TOKEN")  # Check env var as fallback
-        
+
         # Update UI
         self.update_status(f"Status: Fetching subdirectories for {repo_id}...")
         self.fetch_button.setEnabled(False)
         self.subdir_combo.clear()
         self.subdir_combo.addItem("Fetching...")
-        
+
         # Create a worker just for fetching subdirectories
         fetch_worker = DownloadWorker(repo_id, "", token_to_use)
         fetch_worker.status_update.connect(self.update_status)
         fetch_worker.subdirs_discovered_signal.connect(self.update_subdirectory_dropdown)
         fetch_worker.finished_signal.connect(lambda msg, is_error: self.fetch_button.setEnabled(True))
-        
+
         # Override run method to only fetch subdirectories
         def fetch_only_run():
             if not fetch_worker._is_running:
                 return
-                
+
             try:
                 # Only get repo files to discover subdirectories
                 fetch_worker.status_update.emit(f"Listing subdirectories in {fetch_worker.repo_id} via API...")
-                repo_files = fetch_worker._get_repo_files()
-                
+
                 if not fetch_worker._is_running:
                     return
-                    
+
                 # Emit the list of subdirectories discovered
                 fetch_worker.subdirs_discovered_signal.emit(sorted(list(fetch_worker._subdirectories)))
                 fetch_worker.status_update.emit(f"Found {len(fetch_worker._subdirectories)} subdirectories in repository")
                 fetch_worker.finished_signal.emit("Subdirectory fetch complete", False)
-                
+
             except (ConnectionError, ValueError, RuntimeError) as e:
                 logging.error(f"Failed to get subdirectories: {e}")
                 if fetch_worker._is_running:
                     fetch_worker.status_update.emit(f"Error fetching subdirectories: {e}")
                     fetch_worker.finished_signal.emit(f"Error fetching subdirectories: {e}", True)
-        
+
         # Replace the run method with our custom one
         fetch_worker.run = fetch_only_run
         fetch_worker.start()
