@@ -57,7 +57,7 @@ class DownloadWorker(QThread):
 
     def _get_repo_files(self):
         """Fetches file list and sizes from Hugging Face Hub API."""
-        api_url = f"https://huggingface.co/api/models/{self.repo_id}/refs/{self.branch}"
+        api_url = f"https://huggingface.co/api/models/{self.repo_id}/revision/{self.branch}"
         headers = {}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
@@ -455,7 +455,7 @@ class MainWindow(QMainWindow):
 
         # Flag to prevent circular updates between text field and dropdown
         self.updating_subdir_ui = False
-        
+
         # Keep references to worker threads
         self.download_thread = None
         self.branch_fetch_worker = None
@@ -473,7 +473,7 @@ class MainWindow(QMainWindow):
         self.hf_token_input.setPlaceholderText("Optional: Your Hugging Face token (for gated models)")
         self.hf_token_input.setEchoMode(QLineEdit.EchoMode.Password) # Hide token
         input_layout.addRow("Hugging Face Token:", self.hf_token_input)
-        
+
         # Branch selection
         self.branch_input = QLineEdit()
         self.branch_input.setPlaceholderText("Default: main")
@@ -496,7 +496,7 @@ class MainWindow(QMainWindow):
         subdir_layout.addWidget(self.subdir_combo)
         subdir_layout.addWidget(self.fetch_button)
         input_layout.addRow("Available Subdirs:", subdir_layout)
-        
+
         # Branch dropdown with fetch button
         branch_layout = QHBoxLayout()
         self.branch_combo = QComboBox()
@@ -902,7 +902,7 @@ class MainWindow(QMainWindow):
                 self.subdir_filter_input.setText(subdir)
         finally:
             self.updating_subdir_ui = False
-            
+
     @Slot(str)
     def on_branch_selected(self, branch):
         """Handles selection from the branch dropdown."""
@@ -915,7 +915,7 @@ class MainWindow(QMainWindow):
             self.branch_input.setText(branch)
         finally:
             self.updating_subdir_ui = False
-            
+
     @Slot()
     def fetch_branches(self):
         """Fetches available branches without starting a full download."""
@@ -940,12 +940,12 @@ class MainWindow(QMainWindow):
         class BranchFetchWorker(QThread):
             branches_signal = Signal(list)
             error_signal = Signal(str)
-            
+
             def __init__(self, repo_id, token):
                 super().__init__()
                 self.repo_id = repo_id
                 self.token = token
-                
+
             def run(self):
                 try:
                     # Fetch branches from Hugging Face API
@@ -953,52 +953,51 @@ class MainWindow(QMainWindow):
                     headers = {}
                     if self.token:
                         headers["Authorization"] = f"Bearer {self.token}"
-                        
+
                     response = requests.get(api_url, headers=headers, timeout=10)
                     response.raise_for_status()
-                    
+
                     # Extract branch names
                     data = response.json()
                     branches = []
-                    
+
                     # Process the response to extract branch names
-                    for branch_data in data:
-                        if branch_data.get("type") == "branch":
-                            branches.append(branch_data.get("name"))
-                    
+                    for branch_data in data["branches"]:
+                        branches.append(branch_data.get("name"))
+
                     self.branches_signal.emit(branches)
                 except Exception as e:
                     self.error_signal.emit(str(e))
-        
+
         # Clean up any existing worker
         if self.branch_fetch_worker and self.branch_fetch_worker.isRunning():
             self.branch_fetch_worker.quit()
             self.branch_fetch_worker.wait()
-        
+
         # Create and start the worker
         self.branch_fetch_worker = BranchFetchWorker(repo_id, token_to_use)
-        
+
         # Connect signals
         self.branch_fetch_worker.branches_signal.connect(self.update_branch_dropdown)
         self.branch_fetch_worker.error_signal.connect(lambda msg: self.handle_branch_fetch_error(msg))
         self.branch_fetch_worker.finished.connect(lambda: self.fetch_branches_button.setEnabled(True))
-        
+
         # Start the worker
         self.branch_fetch_worker.start()
-    
+
     def update_branch_dropdown(self, branches):
         """Updates the branch dropdown with fetched branches."""
         self.branch_combo.clear()
         self.branch_combo.setEnabled(True)
-        
+
         if not branches:
             self.branch_combo.addItem("No branches found")
             return
-            
+
         # Add each branch to the dropdown
         for branch in branches:
             self.branch_combo.addItem(branch)
-            
+
         # Select the current branch if it exists in the list
         current_branch = self.branch_input.text().strip() or "main"
         index = self.branch_combo.findText(current_branch)
@@ -1009,7 +1008,7 @@ class MainWindow(QMainWindow):
             self.branch_combo.setCurrentIndex(0)
             # Update the branch input field with the selected branch
             self.branch_input.setText(self.branch_combo.currentText())
-    
+
     def handle_branch_fetch_error(self, error_message):
         """Handles errors during branch fetching."""
         self.update_status(f"Error fetching branches: {error_message}")
@@ -1075,15 +1074,15 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handles the window closing event."""
         threads_running = False
-        
+
         # Check if download thread is running
         if self.download_thread and self.download_thread.isRunning():
             threads_running = True
-            
+
         # Check if branch fetch worker is running
         if self.branch_fetch_worker and self.branch_fetch_worker.isRunning():
             threads_running = True
-            
+
         if threads_running:
             reply = QMessageBox.question(self, 'Confirm Exit',
                                          "A background task is in progress. Are you sure you want to exit? "
@@ -1093,19 +1092,19 @@ class MainWindow(QMainWindow):
 
             if reply == QMessageBox.StandardButton.Yes:
                 logging.info("Attempting to stop background threads on close...")
-                
+
                 # Stop download thread if running
                 if self.download_thread and self.download_thread.isRunning():
                     self.download_thread.stop()
                     if not self.download_thread.wait(500):
                         logging.warning("Download thread did not stop gracefully.")
-                
+
                 # Stop branch fetch worker if running
                 if self.branch_fetch_worker and self.branch_fetch_worker.isRunning():
                     self.branch_fetch_worker.quit()
                     if not self.branch_fetch_worker.wait(500):
                         logging.warning("Branch fetch worker did not stop gracefully.")
-                
+
                 event.accept()
             else:
                 event.ignore()
