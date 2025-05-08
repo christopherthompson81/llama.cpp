@@ -42,12 +42,13 @@ class DownloadWorker(QThread):
     # Signal to update UI with discovered subdirectories
     subdirs_discovered_signal = Signal(list) # list of subdirectory names
 
-    def __init__(self, repo_id, local_dir, token, subdir_filter=None):
+    def __init__(self, repo_id, local_dir, token, subdir_filter=None, branch=None):
         super().__init__()
         self.repo_id = repo_id
         self.local_dir = local_dir
         self.token = token # HF token for authorization
         self.subdir_filter = subdir_filter # Optional subdirectory filter
+        self.branch = branch or "main" # Branch to download from, default to main
         self._is_running = True # Flag to signal stop
         self._current_file = None # Reference to current file being downloaded
         self._save_timer = None # Timer for periodic saves
@@ -56,7 +57,7 @@ class DownloadWorker(QThread):
 
     def _get_repo_files(self):
         """Fetches file list and sizes from Hugging Face Hub API."""
-        api_url = f"https://huggingface.co/api/models/{self.repo_id}"
+        api_url = f"https://huggingface.co/api/models/{self.repo_id}/refs/{self.branch}"
         headers = {}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
@@ -173,7 +174,7 @@ class DownloadWorker(QThread):
                 else:
                     logging.info(f"File '{filename}' exists but size mismatch (local: {local_size}, api: {api_size}). Re-downloading.")
             # --- Download the file ---
-            download_url = f"https://huggingface.co/{self.repo_id}/resolve/main/{filename}"
+            download_url = f"https://huggingface.co/{self.repo_id}/resolve/{self.branch}/{filename}"
             temp_file_path = file_path + ".part" # Download to temporary file
             resumed_size = 0
             file_mode = 'wb'
@@ -468,6 +469,12 @@ class MainWindow(QMainWindow):
         self.hf_token_input.setPlaceholderText("Optional: Your Hugging Face token (for gated models)")
         self.hf_token_input.setEchoMode(QLineEdit.EchoMode.Password) # Hide token
         input_layout.addRow("Hugging Face Token:", self.hf_token_input)
+        
+        # Branch selection
+        self.branch_input = QLineEdit()
+        self.branch_input.setPlaceholderText("Default: main")
+        self.branch_input.setText("main")
+        input_layout.addRow("Repository Branch:", self.branch_input)
 
         # Subdirectory filter
         self.subdir_filter_input = QLineEdit()
@@ -485,6 +492,18 @@ class MainWindow(QMainWindow):
         subdir_layout.addWidget(self.subdir_combo)
         subdir_layout.addWidget(self.fetch_button)
         input_layout.addRow("Available Subdirs:", subdir_layout)
+        
+        # Branch dropdown with fetch button
+        branch_layout = QHBoxLayout()
+        self.branch_combo = QComboBox()
+        self.branch_combo.setEnabled(False)  # Initially disabled until repo is queried
+        self.branch_combo.addItem("Loading branches...")
+        self.branch_combo.currentTextChanged.connect(self.on_branch_selected)
+        self.fetch_branches_button = QPushButton("Fetch")
+        self.fetch_branches_button.clicked.connect(self.fetch_branches)
+        branch_layout.addWidget(self.branch_combo)
+        branch_layout.addWidget(self.fetch_branches_button)
+        input_layout.addRow("Available Branches:", branch_layout)
 
         self.local_dir_layout = QHBoxLayout()
         self.local_dir_input = QLineEdit()
@@ -553,6 +572,7 @@ class MainWindow(QMainWindow):
         repo_id = self.repo_id_input.text().strip()
         local_dir = self.local_dir_input.text().strip()
         subdir_filter = self.subdir_filter_input.text().strip() or None
+        branch = self.branch_input.text().strip() or "main"
 
         # --- Input Validation ---
         if not repo_id:
@@ -587,7 +607,7 @@ class MainWindow(QMainWindow):
                             "Accessing gated models may fail.")
 
         # Start download in a separate thread
-        self.download_thread = DownloadWorker(repo_id, local_dir, token_to_use, subdir_filter)
+        self.download_thread = DownloadWorker(repo_id, local_dir, token_to_use, subdir_filter, branch)
         # Connect signals
         self.download_thread.status_update.connect(self.update_status)
         self.download_thread.initial_files_signal.connect(self.populate_initial_progress_bars)
@@ -879,10 +899,23 @@ class MainWindow(QMainWindow):
                 self.subdir_filter_input.setText(subdir)
         finally:
             self.updating_subdir_ui = False
+            
+    @Slot(str)
+    def on_branch_selected(self, branch):
+        """Handles selection from the branch dropdown."""
+        if self.updating_subdir_ui:
+            return  # Avoid circular updates
 
+        self.updating_subdir_ui = True
+        try:
+            # Update the branch text field with selected branch
+            self.branch_input.setText(branch)
+        finally:
+            self.updating_subdir_ui = False
+            
     @Slot()
-    def fetch_subdirectories(self):
-        """Fetches subdirectories without starting a full download."""
+    def fetch_branches(self):
+        """Fetches available branches without starting a full download."""
         repo_id = self.repo_id_input.text().strip()
 
         # Input validation
@@ -895,13 +928,111 @@ class MainWindow(QMainWindow):
         token_to_use = hf_token or os.environ.get("HF_TOKEN")  # Check env var as fallback
 
         # Update UI
-        self.update_status(f"Status: Fetching subdirectories for {repo_id}...")
+        self.update_status(f"Status: Fetching branches for {repo_id}...")
+        self.fetch_branches_button.setEnabled(False)
+        self.branch_combo.clear()
+        self.branch_combo.addItem("Fetching...")
+
+        # Create a thread to fetch branches
+        class BranchFetchWorker(QThread):
+            branches_signal = Signal(list)
+            error_signal = Signal(str)
+            
+            def __init__(self, repo_id, token):
+                super().__init__()
+                self.repo_id = repo_id
+                self.token = token
+                
+            def run(self):
+                try:
+                    # Fetch branches from Hugging Face API
+                    api_url = f"https://huggingface.co/api/models/{self.repo_id}/refs"
+                    headers = {}
+                    if self.token:
+                        headers["Authorization"] = f"Bearer {self.token}"
+                        
+                    response = requests.get(api_url, headers=headers, timeout=10)
+                    response.raise_for_status()
+                    
+                    # Extract branch names
+                    data = response.json()
+                    branches = []
+                    
+                    # Process the response to extract branch names
+                    for branch_data in data:
+                        if branch_data.get("type") == "branch":
+                            branches.append(branch_data.get("name"))
+                    
+                    self.branches_signal.emit(branches)
+                except Exception as e:
+                    self.error_signal.emit(str(e))
+        
+        # Create and start the worker
+        branch_worker = BranchFetchWorker(repo_id, token_to_use)
+        
+        # Connect signals
+        branch_worker.branches_signal.connect(self.update_branch_dropdown)
+        branch_worker.error_signal.connect(lambda msg: self.handle_branch_fetch_error(msg))
+        branch_worker.finished.connect(lambda: self.fetch_branches_button.setEnabled(True))
+        
+        # Start the worker
+        branch_worker.start()
+    
+    def update_branch_dropdown(self, branches):
+        """Updates the branch dropdown with fetched branches."""
+        self.branch_combo.clear()
+        self.branch_combo.setEnabled(True)
+        
+        if not branches:
+            self.branch_combo.addItem("No branches found")
+            return
+            
+        # Add each branch to the dropdown
+        for branch in branches:
+            self.branch_combo.addItem(branch)
+            
+        # Select the current branch if it exists in the list
+        current_branch = self.branch_input.text().strip() or "main"
+        index = self.branch_combo.findText(current_branch)
+        if index >= 0:
+            self.branch_combo.setCurrentIndex(index)
+        else:
+            # If current branch doesn't match any in the list, select the first one
+            self.branch_combo.setCurrentIndex(0)
+            # Update the branch input field with the selected branch
+            self.branch_input.setText(self.branch_combo.currentText())
+    
+    def handle_branch_fetch_error(self, error_message):
+        """Handles errors during branch fetching."""
+        self.update_status(f"Error fetching branches: {error_message}")
+        self.branch_combo.clear()
+        self.branch_combo.addItem("Error fetching branches")
+        self.branch_combo.setEnabled(False)
+        QMessageBox.warning(self, "Branch Fetch Error", f"Failed to fetch branches: {error_message}")
+
+    @Slot()
+    def fetch_subdirectories(self):
+        """Fetches subdirectories without starting a full download."""
+        repo_id = self.repo_id_input.text().strip()
+        branch = self.branch_input.text().strip() or "main"
+
+        # Input validation
+        if not repo_id:
+            QMessageBox.warning(self, "Input Error", "Please enter a Hugging Face Repo ID.")
+            return
+
+        # Get token (optional, for gated models)
+        hf_token = self.hf_token_input.text().strip() or None
+        token_to_use = hf_token or os.environ.get("HF_TOKEN")  # Check env var as fallback
+
+        # Update UI
+        self.update_status(f"Status: Fetching subdirectories for {repo_id} (branch: {branch})...")
         self.fetch_button.setEnabled(False)
         self.subdir_combo.clear()
         self.subdir_combo.addItem("Fetching...")
 
         # Create a worker just for fetching subdirectories
-        fetch_worker = DownloadWorker(repo_id, "", token_to_use)
+        fetch_worker = DownloadWorker(repo_id, "", token_to_use, None, branch)
         fetch_worker.status_update.connect(self.update_status)
         fetch_worker.subdirs_discovered_signal.connect(self.update_subdirectory_dropdown)
         fetch_worker.finished_signal.connect(lambda msg, is_error: self.fetch_button.setEnabled(True))
