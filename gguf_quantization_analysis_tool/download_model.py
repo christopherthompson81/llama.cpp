@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 )
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class DownloadWorker(QThread):
@@ -63,6 +63,7 @@ class DownloadWorker(QThread):
             headers["Authorization"] = f"Bearer {self.token}"
 
         try:
+            # print(f"Getting URL: {api_url}")
             response = requests.get(api_url, headers=headers, timeout=10)
             response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
             repo_info = response.json()
@@ -78,6 +79,7 @@ class DownloadWorker(QThread):
                     # Extract subdirectory if present
                     if '/' in filename:
                         subdir = filename.split('/')[0]
+                        # print(f"Found subdir: {subdir}")
                         self._subdirectories.add(subdir)
 
                     # Apply subdirectory filter if specified
@@ -90,6 +92,7 @@ class DownloadWorker(QThread):
 
             # Emit signal with discovered subdirectories
             self.status_update.emit(f"Found {len(self._subdirectories)} subdirectories in repository")
+            self.subdirs_discovered_signal.emit(sorted(list(self._subdirectories)))
 
             logging.info(f"Found {len(files)} files in repository via API"
                          + (f" (filtered to subdirectory '{self.subdir_filter}')" if self.subdir_filter else ""))
@@ -1068,8 +1071,9 @@ class MainWindow(QMainWindow):
                     fetch_worker.finished_signal.emit(f"Error fetching subdirectories: {e}", True)
 
         # Replace the run method with our custom one
-        fetch_worker.run = fetch_only_run
-        fetch_worker.start()
+        # fetch_worker.run = fetch_only_run
+        # fetch_worker.start()
+        fetch_worker._get_repo_files()
 
     def closeEvent(self, event):
         """Handles the window closing event."""
