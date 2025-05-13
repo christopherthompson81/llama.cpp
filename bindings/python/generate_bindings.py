@@ -9,8 +9,8 @@ clang.cindex.Index.create()
 
 # Parse the header file
 index = clang.cindex.Index.create()
-# target_location = "../../src/llama-model.cpp"
 target_location = "../../src/llama-model.h"
+# target_location = "../../src/llama-model.cpp"
 translation_unit = index.parse(target_location)
 
 # Traverse the AST to collect function declarations
@@ -25,29 +25,27 @@ template = jinja2.Template("""#include <pybind11/pybind11.h>
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(example, m) {
-    {% for declaration in declarations %}{{ declaration }}
-    {% endfor %}
+PYBIND11_MODULE(llama_model, m) {
+{%- for declaration in declarations %}
+    {{ declaration }}
+{% endfor -%}
 }
 """)
 
-function_template = jinja2.Template("""m.def("{{ func.name }}", &{{ func.name }}{% if func.desc -%}, "{{ func.desc }}{%- endif %}");
-""")
+function_template = jinja2.Template("""m.def("{{ func.name }}", &{{ func.name }}{% if func.desc -%}, "{{ func.desc }}{%- endif %}");""")
 
 struct_template = jinja2.Template("""py::class_<{{ struct.name }}>(m, "{{ struct.name }}")
-    .def(py::init<{% for param in struct.parameters %}{{ param.type }}{% if not loop.last %}, {% endif %}{% endfor %}>())
-    {% for param in struct.parameters %}    .def_readwrite("{{ param.name }}", &{{ struct.name }}::{{ param.name }})
-    {% endfor %}
-""")
+        .def(py::init<>())
+{%- for param in struct.parameters %}
+        .def_readwrite("{{ param.name }}", &{{ struct.name }}::{{ param.name }})
+{%- endfor %};""")
 
-constant_template = jinja2.Template("""py::bind_constant(m, "{{ constant.name }}", &{{ constant.name }});
-""")
+constant_template = jinja2.Template("""py::bind_constant(m, "{{ constant.name }}", &{{ constant.name }});""")
 
 enum_template = jinja2.Template("""py::enum_<{{ enum.type }}>(m, "{{ enum.name }}")
 {%- for value in values %}
         .value("{{ value.name }}", {{ enum.type }}::{{ value.name }})
-{%- endfor %}
-""")
+{%- endfor %};""")
 
 
 def dump(obj):
