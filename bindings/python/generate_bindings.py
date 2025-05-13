@@ -7,12 +7,6 @@ import inspect
 # Initialize Clang
 clang.cindex.Index.create()
 
-# Parse the header file
-index = clang.cindex.Index.create()
-target_location = "../../src/llama-model.h"
-# target_location = "../../src/llama-model.cpp"
-translation_unit = index.parse(target_location)
-
 # Traverse the AST to collect function declarations
 declarations = []
 functions = []
@@ -22,17 +16,19 @@ classes = []
 constants = []
 
 template = jinja2.Template("""#include <pybind11/pybind11.h>
-
+{% for include in includes %}
+#include "{{ include }}"
+{% endfor %}
 namespace py = pybind11;
 
-PYBIND11_MODULE(llama_model, m) {
+PYBIND11_MODULE({{name}}, m) {
 {%- for declaration in declarations %}
     {{ declaration }}
 {% endfor -%}
 }
 """)
 
-function_template = jinja2.Template("""m.def("{{ func.name }}", &{{ func.name }}{% if func.desc -%}, "{{ func.desc }}{%- endif %}");""")
+function_template = jinja2.Template("""m.def("{{ func.name }}", &{{ func.name }}{% if func.desc -%}, "{{ func.desc }}"{%- endif %});""")
 
 struct_template = jinja2.Template("""py::class_<{{ struct.name }}>(m, "{{ struct.name }}")
         .def(py::init<>())
@@ -68,10 +64,11 @@ def dump(obj):
             print(e, key)
 
 
-def visit_node(node):
+def visit_node(node, target_location):
     if str(node.location.file) == target_location:
         # Extract function name, return type, parameters
-        if node.kind == clang.cindex.CursorKind.FUNCTION_DECL:
+        if (node.kind == clang.cindex.CursorKind.FUNCTION_DECL and
+                not any(d['name'] == node.spelling for d in functions)):
             name = node.spelling
             return_type = node.result_type.spelling
             description = node.brief_comment if node.brief_comment else ""
@@ -89,7 +86,8 @@ def visit_node(node):
             })
             declarations.append(function_template.render(func=functions[-1]))
         # Handle Structs        
-        elif node.kind == clang.cindex.CursorKind.STRUCT_DECL:
+        elif (node.kind == clang.cindex.CursorKind.STRUCT_DECL and
+                not any(d['name'] == node.spelling for d in structs)):
             name = node.spelling
             parameters = []
             for param in node.get_children():
@@ -107,10 +105,12 @@ def visit_node(node):
                 })
                 declarations.append(struct_template.render(struct=structs[-1]))
         # Handle classes
-        elif node.kind == clang.cindex.CursorKind.CLASS_DECL:
+        elif (node.kind == clang.cindex.CursorKind.CLASS_DECL and
+                not any(d['name'] == node.spelling for d in classes)):
             pass
         # Handle Enums
-        elif node.kind == clang.cindex.CursorKind.ENUM_DECL:
+        elif (node.kind == clang.cindex.CursorKind.ENUM_DECL and
+                not any(d['name'] == node.spelling for d in enums)):
             # Get enum name
             enum_name = node.spelling
 
@@ -140,7 +140,9 @@ def visit_node(node):
             })
             declarations.append(enum_template.render(enum=enums[-1], values=enums[-1]["values"]))
         # Handle constants
-        elif node.kind == clang.cindex.CursorKind.VAR_DECL and node.spelling.isupper() and node.semantic_parent.spelling == target_location:
+        elif (node.kind == clang.cindex.CursorKind.VAR_DECL and
+                node.spelling.isupper() and
+                node.semantic_parent.spelling == target_location):
             name = node.spelling
             constants.append({
                 "name": name,
@@ -151,10 +153,44 @@ def visit_node(node):
             #    print(str(node.kind))
             pass
     for child in node.get_children():
-        visit_node(child)
+        visit_node(child, target_location)
 
 
-visit_node(translation_unit.cursor)
-
-# Print pybind11 file
-print(template.render(declarations=declarations))
+# Parse the header file
+index = clang.cindex.Index.create()
+targets = [
+    {
+        "name": "ggml",
+        "header": "../../ggml/include/ggml.h",
+        "source": "../../ggml/src/ggml.c",
+        "includes": [
+            "ggml.h",
+        ],
+    },
+    {
+        "name": "llama_model",
+        "header": "../../src/llama-model.h",
+        "source": "../../src/llama-model.cpp",
+        "includes": [
+            "llama-model.h",
+        ],
+    },
+]
+for target in targets:
+    # Reset holding arrays
+    declarations = []
+    functions = []
+    structs = []
+    enums = []
+    classes = []
+    constants = []
+    # handle header
+    translation_unit = index.parse(target["header"])
+    visit_node(translation_unit.cursor, target["header"])
+    # handle source
+    # translation_unit = index.parse(target["source"])
+    # visit_node(translation_unit.cursor, target["source"])
+    # Print pybind11 file
+    output = template.render(name=target["name"], includes=target["includes"], declarations=declarations)
+    with open(f"llama_cpp_gen/py_{target['name']}.cpp", "w") as file:
+        file.write(output)
