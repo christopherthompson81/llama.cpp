@@ -175,6 +175,14 @@ targets = [
             "llama-model.h",
         ],
     },
+    {
+        "name": "llama_adapter",
+        "header": "../../src/llama-adapter.h",
+        "source": "../../src/llama-adapter.cpp",
+        "includes": [
+            "llama-adapter.h",
+        ],
+    },
 ]
 for target in targets:
     # Reset holding arrays
